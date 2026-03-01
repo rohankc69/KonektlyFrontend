@@ -1,0 +1,53 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.pins
+Package.resolved
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# OS files
+.DS_Store
+*.swp
+*~
+._*
+Thumbs.db
+
+# IDE
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
+
+# Archives
+*.xcarchive
+*.ipa
+
+# Provisioning profiles
+*.mobileprovision
+*.provisionprofile
+
+# Playground
+timeline.xctimeline
+playground.xcworkspace
+
+# Firebase service account key (never commit secrets)
+firebase-service-account*.json
+*.backup
