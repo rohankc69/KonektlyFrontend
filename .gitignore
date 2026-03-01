@@ -51,3 +51,4 @@ playground.xcworkspace
 # Firebase service account key (never commit secrets)
 firebase-service-account*.json
 *.backup
+**/GoogleService-Info.plist
