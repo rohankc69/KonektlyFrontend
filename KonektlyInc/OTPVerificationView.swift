@@ -22,8 +22,8 @@ struct OTPVerificationView: View {
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
 
-    // Dev mode state
-    @State private var isDevMode = Config.isDevOTPFallbackEnabled
+    // Dev mode state - defaults to OFF so Firebase path is used
+    @State private var isDevMode = false
     @State private var devCode = ""
 
     private var otpCode: String { otpDigits.joined() }
@@ -200,9 +200,10 @@ struct OTPVerificationView: View {
             defer { isLoading = false }
             do {
                 if isDevMode {
+                    print("[OTP] Submitting via DEV fallback path, code length=\(devCode.count)")
                     try await authStore.verifyOTPDev(phone: phoneNumber, code: devCode)
                 } else {
-                    // Firebase: verify the OTP code, get ID token, exchange with backend
+                    print("[OTP] Submitting via FIREBASE path, otp length=\(otpCode.count)")
                     try await authStore.verifyOTPWithFirebase(phone: phoneNumber, otpCode: otpCode)
                 }
             } catch AppError.rateLimited(let retryAfter) {

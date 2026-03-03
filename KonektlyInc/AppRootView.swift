@@ -50,7 +50,8 @@ struct AppRootView: View {
 
     @ViewBuilder
     private var profileCreationView: some View {
-        let role = UserRole(rawValue: authStore.currentUser?.role ?? "") ?? .worker
+        let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
+        let role = UserRole(rawValue: roleRaw) ?? .worker
         NavigationStack {
             if role == .worker {
                 WorkerProfileCreateView()

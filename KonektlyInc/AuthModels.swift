@@ -157,22 +157,55 @@ nonisolated struct AuthTokenResponse: Decodable, Sendable {
     let refresh: String
 }
 
+// verify-otp returns { "data": { "tokens": {...}, "user": {...} } }
+nonisolated struct VerifyOTPResponse: Decodable, Sendable {
+    let tokens: AuthTokenResponse
+    let user: AuthUser
+}
+
+// /me/ returns { "data": { "user": {...} } }
+nonisolated struct MeResponse: Decodable, Sendable {
+    let user: AuthUser
+}
+
 // MARK: - Me / Current User
 
 nonisolated struct AuthUser: Decodable, Sendable, Equatable {
-    let id: String
+    let id: Int
+    let username: String?
     let phone: String?
     let email: String?
-    let emailVerified: Bool
-    let role: String?
-    let hasWorkerProfile: Bool
-    let hasBusinessProfile: Bool
+    let isEmailVerified: Bool
+    let isActiveProfile: Bool
+    let workerProfile: AnyCodable?
+    let businessProfile: AnyCodable?
+    let accessTier: String?
+    let phoneVerifiedAt: String?
+    let emailVerifiedAt: String?
+
+    // Convenience computed properties for the rest of the app
+    var emailVerified: Bool { isEmailVerified }
+    var hasWorkerProfile: Bool { workerProfile != nil }
+    var hasBusinessProfile: Bool { businessProfile != nil }
 
     enum CodingKeys: String, CodingKey {
-        case id, phone, email, role
-        case emailVerified = "email_verified"
-        case hasWorkerProfile = "has_worker_profile"
-        case hasBusinessProfile = "has_business_profile"
+        case id, username, phone, email
+        case isEmailVerified = "is_email_verified"
+        case isActiveProfile = "is_active_profile"
+        case workerProfile = "worker_profile"
+        case businessProfile = "business_profile"
+        case accessTier = "access_tier"
+        case phoneVerifiedAt = "phone_verified_at"
+        case emailVerifiedAt = "email_verified_at"
+    }
+
+    static func == (lhs: AuthUser, rhs: AuthUser) -> Bool {
+        lhs.id == rhs.id
+            && lhs.phone == rhs.phone
+            && lhs.email == rhs.email
+            && lhs.isEmailVerified == rhs.isEmailVerified
+            && lhs.isActiveProfile == rhs.isActiveProfile
+            && lhs.accessTier == rhs.accessTier
     }
 }
 
@@ -229,33 +262,27 @@ nonisolated struct ProfileCreateResponse: Decodable, Sendable {
 // MARK: - Verification Status
 
 nonisolated struct ProfileStatus: Decodable, Sendable {
-    let emailVerified: Bool
-    let phoneVerified: Bool
-    let hasWorkerProfile: Bool
-    let hasBusinessProfile: Bool
-    let identityVerified: Bool
+    let workerStatus: AnyCodable?
+    let businessStatus: AnyCodable?
+    let isActiveProfile: Bool
     let accessTier: String
 
+    // Convenience for the rest of the app
+    var hasWorkerProfile: Bool { workerStatus != nil }
+    var hasBusinessProfile: Bool { businessStatus != nil }
+
     enum CodingKeys: String, CodingKey {
-        case emailVerified = "email_verified"
-        case phoneVerified = "phone_verified"
-        case hasWorkerProfile = "has_worker_profile"
-        case hasBusinessProfile = "has_business_profile"
-        case identityVerified = "identity_verified"
+        case workerStatus = "worker_status"
+        case businessStatus = "business_status"
+        case isActiveProfile = "is_active_profile"
         case accessTier = "access_tier"
     }
 }
 
 nonisolated struct AccessTier: Decodable, Sendable {
-    let tier: String
-    let canPostJobs: Bool
-    let canApplyJobs: Bool
-    let maxActiveJobs: Int?
+    let accessTier: String
 
     enum CodingKeys: String, CodingKey {
-        case tier
-        case canPostJobs = "can_post_jobs"
-        case canApplyJobs = "can_apply_jobs"
-        case maxActiveJobs = "max_active_jobs"
+        case accessTier = "access_tier"
     }
 }

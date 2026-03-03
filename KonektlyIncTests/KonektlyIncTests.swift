@@ -117,22 +117,25 @@ final class APIResponseDecodingTests: XCTestCase {
         {
             "success": true,
             "data": {
-                "id": "user-123",
+                "id": 1,
+                "username": "15550001234",
                 "phone": "+15550001234",
                 "email": "user@example.com",
-                "email_verified": true,
-                "role": "worker",
-                "has_worker_profile": false,
-                "has_business_profile": false
+                "is_email_verified": true,
+                "is_active_profile": false,
+                "worker_profile": null,
+                "business_profile": null,
+                "access_tier": "phone_verified",
+                "phone_verified_at": "2026-03-03T01:08:40.798504Z",
+                "email_verified_at": null
             }
         }
         """.data(using: .utf8)!
 
         let response = try decoder.decode(APIResponse<AuthUser>.self, from: json)
         let user = try XCTUnwrap(response.data)
-        XCTAssertEqual(user.id, "user-123")
+        XCTAssertEqual(user.id, 1)
         XCTAssertTrue(user.emailVerified)
-        XCTAssertEqual(user.role, "worker")
         XCTAssertFalse(user.hasWorkerProfile)
     }
 
@@ -141,22 +144,19 @@ final class APIResponseDecodingTests: XCTestCase {
         {
             "success": true,
             "data": {
-                "email_verified": true,
-                "phone_verified": true,
-                "has_worker_profile": true,
-                "has_business_profile": false,
-                "identity_verified": false,
-                "access_tier": "basic"
+                "worker_status": {"id": 1},
+                "business_status": null,
+                "is_active_profile": false,
+                "access_tier": "phone_verified"
             }
         }
         """.data(using: .utf8)!
 
         let response = try decoder.decode(APIResponse<ProfileStatus>.self, from: json)
         let status = try XCTUnwrap(response.data)
-        XCTAssertTrue(status.emailVerified)
         XCTAssertTrue(status.hasWorkerProfile)
         XCTAssertFalse(status.hasBusinessProfile)
-        XCTAssertEqual(status.accessTier, "basic")
+        XCTAssertEqual(status.accessTier, "phone_verified")
     }
 
     func test_accessTier_decodesCorrectly() throws {
@@ -164,19 +164,14 @@ final class APIResponseDecodingTests: XCTestCase {
         {
             "success": true,
             "data": {
-                "tier": "premium",
-                "can_post_jobs": true,
-                "can_apply_jobs": true,
-                "max_active_jobs": 10
+                "access_tier": "phone_verified"
             }
         }
         """.data(using: .utf8)!
 
         let response = try decoder.decode(APIResponse<AccessTier>.self, from: json)
         let tier = try XCTUnwrap(response.data)
-        XCTAssertEqual(tier.tier, "premium")
-        XCTAssertTrue(tier.canPostJobs)
-        XCTAssertEqual(tier.maxActiveJobs, 10)
+        XCTAssertEqual(tier.accessTier, "phone_verified")
     }
 }
 

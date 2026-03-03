@@ -174,7 +174,8 @@ actor APIClient {
 
         print("[API] HTTP \(httpResponse.statusCode) <- \(urlString)")
         if let body = String(data: data, encoding: .utf8) {
-            print("[API] Response body: \(body)")
+            let truncated = body.count > 1000 ? String(body.prefix(1000)) + "...<truncated>" : body
+            print("[API] Response body: \(truncated)")
         }
 
         // Rate limit
@@ -261,6 +262,10 @@ actor APIClient {
         } catch let appError as AppError {
             throw appError
         } catch {
+            print("[API] Decode error: \(error)")
+            if let raw = String(data: data, encoding: .utf8) {
+                print("[API] Raw data that failed to decode: \(raw)")
+            }
             throw AppError.decoding(underlying: error)
         }
     }

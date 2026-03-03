@@ -47,7 +47,8 @@ final class AuthStore: ObservableObject {
 
     var needsProfile: Bool {
         guard let user = currentUser else { return false }
-        let role = UserRole(rawValue: user.role ?? "") ?? .worker
+        let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
+        let role = UserRole(rawValue: roleRaw) ?? .worker
         switch role {
         case .worker: return !(profileStatus?.hasWorkerProfile ?? user.hasWorkerProfile)
         case .business: return !(profileStatus?.hasBusinessProfile ?? user.hasBusinessProfile)
@@ -68,16 +69,19 @@ final class AuthStore: ObservableObject {
         defer { isLoading = false }
         clearError()
 
+        print("[AUTH] sendOTP called, phone length=\(phone.count), starts with +=\(phone.hasPrefix("+"))")
+
         do {
-            // Firebase will use APNs silent push or fall back to reCAPTCHA
             let verificationID = try await PhoneAuthProvider.provider().verifyPhoneNumber(phone, uiDelegate: nil)
             self.firebaseVerificationID = verificationID
-            print("[AUTH] OTP sent to \(phone)")
+            print("[AUTH] OTP sent successfully, verificationID present=\(verificationID.isEmpty == false)")
         } catch {
             let nsError = error as NSError
-            print("[AUTH] sendOTP error code: \(nsError.code)")
-            print("[AUTH] sendOTP error domain: \(nsError.domain)")
-            print("[AUTH] sendOTP error userInfo: \(nsError.userInfo)")
+            print("[AUTH] sendOTP failed: domain=\(nsError.domain) code=\(nsError.code)")
+            if let underlyingInfo = nsError.userInfo["FIRAuthErrorUserInfoDeserializedResponseKey"] as? [String: Any],
+               let message = underlyingInfo["message"] as? String {
+                print("[AUTH] sendOTP server reason: \(message)")
+            }
             throw AppError.apiError(code: .unknown, message: error.localizedDescription)
         }
     }
@@ -86,12 +90,15 @@ final class AuthStore: ObservableObject {
 
     func verifyOTPWithFirebase(phone: String, otpCode: String) async throws {
         guard let verificationID = firebaseVerificationID else {
+            print("[AUTH] verify failed: no verificationID stored")
             throw AppError.apiError(code: .unknown, message: "No verification ID. Please resend the code.")
         }
 
         isLoading = true
         defer { isLoading = false }
         clearError()
+
+        print("[AUTH] verifyOTP called, verificationID present=true, code length=\(otpCode.count)")
 
         // Step 1: Create Firebase credential from the OTP code
         let credential = PhoneAuthProvider.provider().credential(
@@ -103,27 +110,31 @@ final class AuthStore: ObservableObject {
         let authResult: AuthDataResult
         do {
             authResult = try await Auth.auth().signIn(with: credential)
-            print("[AUTH] Firebase sign-in succeeded")
+            print("[AUTH] Firebase sign-in succeeded, uid present=\(authResult.user.uid.isEmpty == false)")
         } catch {
-            print("[AUTH] Firebase verify error: \(error.localizedDescription)")
+            print("[AUTH] Firebase verify failed: \(error.localizedDescription)")
             throw AppError.apiError(code: .otpInvalid, message: "Invalid verification code. Please try again.")
         }
 
         // Step 3: Get the Firebase ID token (force refresh to avoid stale cache)
         guard let idToken = try? await authResult.user.getIDTokenResult(forcingRefresh: true).token else {
+            print("[AUTH] Failed to get ID token from Firebase user")
             throw AppError.apiError(code: .unknown, message: "Failed to get Firebase ID token.")
         }
-        print("[AUTH] Got Firebase ID token")
+        print("[AUTH] Got Firebase ID token, length=\(idToken.count)")
 
-        // Step 4: Use Firebase's phone number (guaranteed E.164 format) to avoid mismatch
+        // Step 4: Use Firebase's phone number (guaranteed E.164 format)
         let verifiedPhone = authResult.user.phoneNumber ?? phone
+        print("[AUTH] Sending to backend: phone=\(verifiedPhone), id_token present=true")
 
-        // Step 5: Send the ID token to your backend for JWT exchange
-        let tokens: AuthTokenResponse = try await APIClient.shared.publicRequest(
+        // Step 5: Send the ID token to backend for JWT exchange
+        let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
             .verifyOTPFirebase(phone: verifiedPhone, idToken: idToken)
         )
-        storeTokens(tokens)
-        await loadCurrentUser()
+        print("[AUTH] Backend JWT exchange succeeded")
+        storeTokens(response.tokens)
+        authState = .authenticated(user: response.user)
+        await loadProfileStatus()
     }
 
     // MARK: - Verify OTP (Dev fallback - only available in DEBUG builds)
@@ -136,23 +147,25 @@ final class AuthStore: ObservableObject {
         defer { isLoading = false }
         clearError()
 
-        let tokens: AuthTokenResponse = try await APIClient.shared.publicRequest(
+        let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
             .verifyOTPDev(phone: phone, code: code)
         )
-        storeTokens(tokens)
-        await loadCurrentUser()
+        storeTokens(response.tokens)
+        authState = .authenticated(user: response.user)
+        await loadProfileStatus()
     }
 
     // MARK: - Load Current User
 
     func loadCurrentUser() async {
         do {
-            let user: AuthUser = try await APIClient.shared.request(.me)
-            authState = .authenticated(user: user)
+            let response: MeResponse = try await APIClient.shared.request(.me)
+            authState = .authenticated(user: response.user)
             await loadProfileStatus()
         } catch AppError.unauthorized {
             signOut()
         } catch {
+            print("[AUTH] loadCurrentUser failed: \(error)")
             self.error = error as? AppError ?? .unknown
         }
     }

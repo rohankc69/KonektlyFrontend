@@ -95,7 +95,7 @@ struct VerificationStatusView: View {
                 }
             }
 
-            let role = UserRole(rawValue: user?.role ?? "") ?? .worker
+            let role = UserRole(rawValue: UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue) ?? .worker
             Text(role == .worker ? "Worker Account" : "Business Account")
                 .font(Theme.Typography.caption)
                 .foregroundColor(.white)
@@ -121,30 +121,14 @@ struct VerificationStatusView: View {
                         .font(Theme.Typography.headlineBold)
                         .foregroundColor(Theme.Colors.primaryText)
                     Spacer()
-                    Text(tier.tier.uppercased())
+                    Text(tier.accessTier.replacingOccurrences(of: "_", with: " ").uppercased())
                         .font(Theme.Typography.caption)
                         .fontWeight(.bold)
                         .foregroundColor(.white)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.xs)
-                        .background(tierColor(tier.tier))
+                        .background(tierColor(tier.accessTier))
                         .cornerRadius(Theme.CornerRadius.pill)
-                }
-
-                Divider()
-
-                HStack(spacing: Theme.Spacing.xl) {
-                    TierFeatureRow(icon: "briefcase.fill",
-                                  label: "Post Jobs",
-                                  enabled: tier.canPostJobs)
-                    TierFeatureRow(icon: "person.fill.checkmark",
-                                  label: "Apply Jobs",
-                                  enabled: tier.canApplyJobs)
-                    if let max = tier.maxActiveJobs {
-                        TierFeatureRow(icon: "list.number",
-                                      label: "Max \(max) active",
-                                      enabled: true)
-                    }
                 }
             }
             .padding(Theme.Spacing.lg)
@@ -165,29 +149,24 @@ struct VerificationStatusView: View {
                 ChecklistRow(
                     title: "Phone Verified",
                     subtitle: "Required to sign in",
-                    isComplete: status?.phoneVerified ?? true,
+                    isComplete: user?.phone != nil,
                     isRequired: true
                 )
                 ChecklistRow(
                     title: "Email Verified",
                     subtitle: "Unlock messaging & notifications",
-                    isComplete: user?.emailVerified ?? (status?.emailVerified ?? false),
+                    isComplete: user?.emailVerified ?? false,
                     isRequired: false
                 )
 
-                let role = UserRole(rawValue: user?.role ?? "") ?? .worker
+                let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
+                let role = UserRole(rawValue: roleRaw) ?? .worker
                 if role == .worker {
                     ChecklistRow(
                         title: "Worker Profile",
                         subtitle: "Required to apply for shifts",
                         isComplete: status?.hasWorkerProfile ?? user?.hasWorkerProfile ?? false,
                         isRequired: true
-                    )
-                    ChecklistRow(
-                        title: "Identity Verified",
-                        subtitle: "Unlock premium shifts",
-                        isComplete: status?.identityVerified ?? false,
-                        isRequired: false
                     )
                 } else {
                     ChecklistRow(
@@ -208,8 +187,9 @@ struct VerificationStatusView: View {
 
     @ViewBuilder
     private var actionCards: some View {
-        let role = UserRole(rawValue: user?.role ?? "") ?? .worker
-        let emailVerified = user?.emailVerified ?? (status?.emailVerified ?? false)
+        let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
+        let role = UserRole(rawValue: roleRaw) ?? .worker
+        let emailVerified = user?.emailVerified ?? false
         let hasProfile = role == .worker
             ? (status?.hasWorkerProfile ?? user?.hasWorkerProfile ?? false)
             : (status?.hasBusinessProfile ?? user?.hasBusinessProfile ?? false)
