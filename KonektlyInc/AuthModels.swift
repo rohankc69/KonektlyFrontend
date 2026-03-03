@@ -197,7 +197,8 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
     let lastName: String?
     let isEmailVerified: Bool
     let isActiveProfile: Bool
-    let termsAccepted: Bool?
+    let termsAcceptedAt: String?
+    let termsVersion: String?
     let workerProfile: AnyCodable?
     let businessProfile: AnyCodable?
     let accessTier: String?
@@ -205,13 +206,38 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
     let emailVerifiedAt: String?
 
     var emailVerified: Bool { isEmailVerified }
+
+    // Profile exists (even if shell/pending with no data)
     var hasWorkerProfile: Bool { workerProfile != nil }
     var hasBusinessProfile: Bool { businessProfile != nil }
+
+    // Profile has actual gov ID data filled in (not just a shell)
+    var hasCompleteWorkerProfile: Bool {
+        guard let dict = workerProfile?.value as? [String: AnyCodable],
+              let govId = dict["gov_id_number"]
+        else { return false }
+        // gov_id_number must not be null or empty
+        if govId.value is NSNull { return false }
+        if let str = govId.value as? String { return !str.isEmpty }
+        return true
+    }
+
+    var hasCompleteBusinessProfile: Bool {
+        guard let dict = businessProfile?.value as? [String: AnyCodable],
+              let bizId = dict["business_id"]
+        else { return false }
+        if bizId.value is NSNull { return false }
+        if let str = bizId.value as? String { return !str.isEmpty }
+        return true
+    }
+
     var hasName: Bool {
         guard let first = firstName, let last = lastName else { return false }
         return first.count >= 2 && last.count >= 2
     }
-    var hasAcceptedTerms: Bool { termsAccepted == true }
+
+    // Backend sends terms_accepted_at as a date string, not a bool
+    var hasAcceptedTerms: Bool { termsAcceptedAt != nil }
 
     enum CodingKeys: String, CodingKey {
         case id, username, phone, email
@@ -219,7 +245,8 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
         case lastName = "last_name"
         case isEmailVerified = "is_email_verified"
         case isActiveProfile = "is_active_profile"
-        case termsAccepted = "terms_accepted"
+        case termsAcceptedAt = "terms_accepted_at"
+        case termsVersion = "terms_version"
         case workerProfile = "worker_profile"
         case businessProfile = "business_profile"
         case accessTier = "access_tier"
@@ -235,7 +262,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
             && lhs.lastName == rhs.lastName
             && lhs.isEmailVerified == rhs.isEmailVerified
             && lhs.isActiveProfile == rhs.isActiveProfile
-            && lhs.termsAccepted == rhs.termsAccepted
+            && lhs.termsAcceptedAt == rhs.termsAcceptedAt
             && lhs.accessTier == rhs.accessTier
     }
 }

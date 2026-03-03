@@ -78,9 +78,9 @@ final class AuthStore: ObservableObject {
         let role = selectedRole
         let hasProfile: Bool
         if let status = profileStatus {
-            hasProfile = role == .worker ? status.hasWorkerProfile : status.hasBusinessProfile
+            hasProfile = role == .worker ? (user.hasCompleteWorkerProfile) : (user.hasCompleteBusinessProfile)
         } else {
-            hasProfile = role == .worker ? user.hasWorkerProfile : user.hasBusinessProfile
+            hasProfile = role == .worker ? user.hasCompleteWorkerProfile : user.hasCompleteBusinessProfile
         }
 
         if let status = profileStatus {

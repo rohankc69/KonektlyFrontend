@@ -29,102 +29,90 @@ struct WorkerProfileCreateView: View {
     ]
 
     private var isValid: Bool {
-        !govIdNumber.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !govIdType.isEmpty
+        !govIdNumber.trimmingCharacters(in: .whitespaces).isEmpty && !govIdType.isEmpty
     }
 
     var body: some View {
-        ZStack {
-            Theme.Colors.background.ignoresSafeArea()
-
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxl) {
-                    // Progress indicator
-                    OnboardingProgress(currentStep: 3, totalSteps: 3)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                    // Header
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        Text("Verify your identity")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(Theme.Colors.primaryText)
 
-                    headerSection
-                    formSection
+                        Text("We need your government ID to get you verified")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    }
+                    .padding(.top, Theme.Spacing.xxl)
 
-                    if let error = errorMessage {
-                        ErrorBanner(message: error) { errorMessage = nil }
+                    // Form
+                    VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                        // ID Type picker
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("ID Type")
+                                .font(Theme.Typography.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(Theme.Colors.primaryText)
+
+                            Menu {
+                                ForEach(govIdTypes, id: \.self) { type in
+                                    Button(govIdTypeLabels[type] ?? type) { govIdType = type }
+                                }
+                            } label: {
+                                HStack {
+                                    Text(govIdType.isEmpty ? "Select ID type" : (govIdTypeLabels[govIdType] ?? govIdType))
+                                        .font(Theme.Typography.body)
+                                        .foregroundColor(govIdType.isEmpty ? Theme.Colors.secondaryText : Theme.Colors.primaryText)
+                                    Spacer()
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .foregroundColor(Theme.Colors.secondaryText)
+                                        .font(.system(size: 12))
+                                }
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                            }
+                        }
+
+                        // ID Number
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("ID Number")
+                                .font(Theme.Typography.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(Theme.Colors.primaryText)
+
+                            TextField("Enter your ID number", text: $govIdNumber)
+                                .font(Theme.Typography.body)
+                                .autocorrectionDisabled()
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                        }
                     }
 
-                    submitButton
+                    // Error
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.error)
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.xxl)
-                .padding(.bottom, Theme.Spacing.xxl)
-            }
-        }
-        .navigationTitle("Your Details")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Sign Out") { authStore.signOut() }
-                    .font(Theme.Typography.footnote)
-                    .foregroundColor(Theme.Colors.secondaryText)
-            }
-        }
-    }
-
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text("Verify Your Identity")
-                .font(Theme.Typography.title2)
-                .foregroundColor(Theme.Colors.primaryText)
-            Text("We need your government ID to get you verified.")
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
-        }
-    }
-
-    private var formSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("ID Type")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.secondaryText)
-
-                Menu {
-                    ForEach(govIdTypes, id: \.self) { type in
-                        Button(govIdTypeLabels[type] ?? type) { govIdType = type }
-                    }
-                } label: {
-                    HStack {
-                        Text(govIdType.isEmpty ? "Select ID type" : (govIdTypeLabels[govIdType] ?? govIdType))
-                            .font(Theme.Typography.body)
-                            .foregroundColor(govIdType.isEmpty ? Theme.Colors.secondaryText : Theme.Colors.primaryText)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .font(.system(size: 12))
-                    }
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
-                            .stroke(Theme.Colors.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-                }
             }
 
-            ProfileTextField(label: "ID Number", placeholder: "Enter your ID number", text: $govIdNumber)
+            // Bottom bar
+            OnboardingBottomBar(
+                onBack: { authStore.signOut() },
+                onNext: submit,
+                isLoading: isLoading,
+                isEnabled: isValid
+            )
         }
-    }
-
-    private var submitButton: some View {
-        Button(action: submit) {
-            if isLoading {
-                ProgressView().progressViewStyle(.circular).tint(.white)
-                    .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-            } else {
-                Text("Continue")
-                    .primaryButtonStyle(isEnabled: isValid)
-            }
-        }
-        .disabled(!isValid || isLoading)
-        .frame(height: Theme.Sizes.buttonHeight)
+        .background(Theme.Colors.background)
+        .navigationBarHidden(true)
     }
 
     private func submit() {
@@ -170,70 +158,48 @@ struct BusinessProfileCreateView: View {
     }
 
     var body: some View {
-        ZStack {
-            Theme.Colors.background.ignoresSafeArea()
-
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxl) {
-                    // Progress indicator
-                    OnboardingProgress(currentStep: 3, totalSteps: 3)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                    // Header
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        Text("Business verification")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(Theme.Colors.primaryText)
 
-                    headerSection
-                    formSection
+                        Text("Provide your business info to get verified")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    }
+                    .padding(.top, Theme.Spacing.xxl)
 
-                    if let error = errorMessage {
-                        ErrorBanner(message: error) { errorMessage = nil }
+                    // Form
+                    VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                        OnboardingTextField(label: "Business Name", placeholder: "Acme Corp", text: $businessName)
+                        OnboardingTextField(label: "Business ID", placeholder: "e.g. BN123456789", text: $businessId)
+                        OnboardingTextField(label: "Manager Gov ID", placeholder: "Manager ID number", text: $managerGovIdNumber)
                     }
 
-                    submitButton
+                    // Error
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.error)
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.xxl)
-                .padding(.bottom, Theme.Spacing.xxl)
             }
-        }
-        .navigationTitle("Business Details")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Sign Out") { authStore.signOut() }
-                    .font(Theme.Typography.footnote)
-                    .foregroundColor(Theme.Colors.secondaryText)
-            }
-        }
-    }
 
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text("Business Verification")
-                .font(Theme.Typography.title2)
-                .foregroundColor(Theme.Colors.primaryText)
-            Text("Provide your business info to get verified.")
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
+            // Bottom bar
+            OnboardingBottomBar(
+                onBack: { authStore.signOut() },
+                onNext: submit,
+                isLoading: isLoading,
+                isEnabled: isValid
+            )
         }
-    }
-
-    private var formSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            ProfileTextField(label: "Business Name", placeholder: "Acme Corp", text: $businessName)
-            ProfileTextField(label: "Business ID", placeholder: "e.g. BN123456789", text: $businessId)
-            ProfileTextField(label: "Manager Gov ID", placeholder: "Manager ID number", text: $managerGovIdNumber)
-        }
-    }
-
-    private var submitButton: some View {
-        Button(action: submit) {
-            if isLoading {
-                ProgressView().progressViewStyle(.circular).tint(.white)
-                    .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-            } else {
-                Text("Continue")
-                    .primaryButtonStyle(isEnabled: isValid)
-            }
-        }
-        .disabled(!isValid || isLoading)
-        .frame(height: Theme.Sizes.buttonHeight)
+        .background(Theme.Colors.background)
+        .navigationBarHidden(true)
     }
 
     private func submit() {
@@ -262,7 +228,43 @@ struct BusinessProfileCreateView: View {
     }
 }
 
-// MARK: - Reusable Profile Text Field
+// MARK: - Reusable Onboarding Text Field
+
+struct OnboardingTextField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    var keyboardType: UIKeyboardType = .default
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(label)
+                .font(Theme.Typography.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(Theme.Colors.primaryText)
+
+            TextField(placeholder, text: $text)
+                .keyboardType(keyboardType)
+                .font(Theme.Typography.body)
+                .focused($isFocused)
+                .autocorrectionDisabled()
+                .padding(Theme.Spacing.lg)
+                .background(Theme.Colors.inputBackground)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                        .stroke(
+                            isFocused ? Theme.Colors.inputBorderFocused : Color.clear,
+                            lineWidth: 2
+                        )
+                )
+        }
+    }
+}
+
+// MARK: - Legacy ProfileTextField (for backward compat)
 
 struct ProfileTextField: View {
     let label: String
@@ -271,24 +273,7 @@ struct ProfileTextField: View {
     var keyboardType: UIKeyboardType = .default
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(label)
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
-
-            TextField(placeholder, text: $text)
-                .keyboardType(keyboardType)
-                .font(Theme.Typography.body)
-                .foregroundColor(Theme.Colors.primaryText)
-                .autocorrectionDisabled()
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
-                        .stroke(Theme.Colors.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-        }
+        OnboardingTextField(label: label, placeholder: placeholder, text: $text, keyboardType: keyboardType)
     }
 }
 

@@ -13,7 +13,6 @@ struct OTPVerificationView: View {
     @EnvironmentObject private var authStore: AuthStore
     @Environment(\.dismiss) private var dismiss
 
-    // 6-digit OTP boxes
     @State private var otpDigits: [String] = Array(repeating: "", count: 6)
     @FocusState private var focusedIndex: Int?
 
@@ -22,7 +21,6 @@ struct OTPVerificationView: View {
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
 
-    // Dev mode state - defaults to OFF so Firebase path is used
     @State private var isDevMode = false
     @State private var devCode = ""
 
@@ -31,147 +29,159 @@ struct OTPVerificationView: View {
     private var canSubmit: Bool { isComplete && !isLoading }
 
     var body: some View {
-        ZStack {
-            Theme.Colors.background.ignoresSafeArea()
-
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxxl) {
-                    headerSection
-                    if isDevMode {
-                        devFallbackSection
-                    } else {
-                        otpInputSection
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                    // Header
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        Text("Enter the 6-digit code sent to you at \(phoneNumber).")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(Theme.Colors.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    submitButton
-                    resendSection
+                    .padding(.top, Theme.Spacing.xxl)
+
+                    if isDevMode {
+                        // Dev fallback input
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("Dev code")
+                                .font(Theme.Typography.caption)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                            TextField("Enter code from backend logs", text: $devCode)
+                                .keyboardType(.numberPad)
+                                .font(Theme.Typography.body)
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .stroke(Theme.Colors.inputBorderFocused, lineWidth: 2)
+                                )
+                        }
+                    } else {
+                        // OTP digit boxes
+                        HStack(spacing: Theme.Spacing.sm) {
+                            ForEach(0..<6, id: \.self) { index in
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .fill(Theme.Colors.inputBackground)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                                .stroke(
+                                                    focusedIndex == index ? Theme.Colors.inputBorderFocused : Color.clear,
+                                                    lineWidth: 2
+                                                )
+                                        )
+                                        .frame(height: 52)
+
+                                    Text(otpDigits[index])
+                                        .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                                        .foregroundColor(Theme.Colors.primaryText)
+                                }
+                                .onTapGesture { focusedIndex = 0 }
+                            }
+                        }
+
+                        // Hidden text field
+                        TextField("", text: Binding(
+                            get: { otpCode },
+                            set: { handleOTPInput($0) }
+                        ))
+                        .keyboardType(.numberPad)
+                        .focused($focusedIndex, equals: 0)
+                        .frame(width: 0, height: 0)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                    }
+
+                    // Error
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.error)
+                    }
+
+                    // Resend link
+                    if cooldownSeconds > 0 {
+                        Text("I didn't receive a code (\(cooldownSeconds)s)")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    } else {
+                        Button("I didn't receive a code") {
+                            Task { await resendOTP() }
+                        }
+                        .font(Theme.Typography.subheadline)
+                        .foregroundColor(Theme.Colors.secondaryText)
+                    }
+
+                    // Dev toggle
                     if Config.isDevOTPFallbackEnabled {
-                        devToggle
+                        Toggle(isOn: $isDevMode) {
+                            Text("Use dev code fallback")
+                                .font(Theme.Typography.caption)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                        }
+                        .toggleStyle(.switch)
+                        .tint(Theme.Colors.warning)
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.huge)
-                .padding(.bottom, Theme.Spacing.xxl)
             }
+
+            // Bottom bar: back arrow + Next button
+            bottomBar
         }
-        .navigationTitle("Verify Phone")
-        .navigationBarTitleDisplayMode(.inline)
+        .background(Theme.Colors.background)
+        .navigationBarHidden(true)
         .onAppear { focusedIndex = 0 }
     }
 
-    // MARK: - Subviews
+    // MARK: - Bottom Bar
 
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text("Enter Code")
-                .font(Theme.Typography.largeTitle)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            Group {
-                Text("Sent to ")
-                    .foregroundColor(Theme.Colors.secondaryText)
-                + Text(phoneNumber)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .fontWeight(.medium)
-            }
-            .font(Theme.Typography.subheadline)
-        }
-    }
-
-    private var otpInputSection: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            HStack(spacing: Theme.Spacing.sm) {
-                ForEach(0..<6, id: \.self) { index in
-                    OTPDigitBox(
-                        digit: otpDigits[index],
-                        isFocused: focusedIndex == index
-                    )
-                    .onTapGesture { focusedIndex = index }
-                }
-            }
-
-            // Hidden text field capturing keyboard input
-            TextField("", text: Binding(
-                get: { otpCode },
-                set: { handleOTPInput($0) }
-            ))
-            .keyboardType(.numberPad)
-            .focused($focusedIndex, equals: 0)
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .accessibilityHidden(true)
-
-            if let error = errorMessage {
-                ErrorBanner(message: error) { errorMessage = nil }
-            }
-        }
-    }
-
-    private var devFallbackSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Label("Dev Mode - Plain Code", systemImage: "hammer.fill")
-                .font(Theme.Typography.footnote)
-                .foregroundColor(Theme.Colors.warning)
-
-            TextField("Enter code from backend logs", text: $devCode)
-                .keyboardType(.numberPad)
-                .padding(Theme.Spacing.lg)
-                .background(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(Theme.Colors.warning, lineWidth: 1.5)
-                )
-                .cornerRadius(Theme.CornerRadius.medium)
-
-            if let error = errorMessage {
-                ErrorBanner(message: error) { errorMessage = nil }
-            }
-        }
-    }
-
-    private var submitButton: some View {
-        Button(action: submit) {
-            if isLoading {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .tint(.white)
-                    .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-            } else {
-                Text("Verify")
-                    .primaryButtonStyle(isEnabled: isDevMode ? !devCode.isEmpty : canSubmit)
-            }
-        }
-        .disabled(isDevMode ? devCode.isEmpty || isLoading : !canSubmit)
-        .frame(height: Theme.Sizes.buttonHeight)
-    }
-
-    private var resendSection: some View {
+    private var bottomBar: some View {
         HStack {
-            if cooldownSeconds > 0 {
-                Text("Resend code in \(cooldownSeconds)s")
-                    .font(Theme.Typography.footnote)
-                    .foregroundColor(Theme.Colors.secondaryText)
-            } else {
-                Button("Didn't receive a code? Resend") {
-                    Task { await resendOTP() }
-                }
-                .font(Theme.Typography.footnote)
-                .foregroundColor(Theme.Colors.accent)
+            Button(action: { dismiss() }) {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(Theme.Colors.primaryText)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.Colors.cardBackground)
+                    .clipShape(Circle())
             }
+
+            Spacer()
+
+            Button(action: submit) {
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .frame(width: 100, height: 48)
+                } else {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text("Next")
+                            .font(.system(size: 16, weight: .semibold))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .frame(height: 48)
+                }
+            }
+            .background(nextButtonEnabled ? Color.black : Color.black.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
+            .disabled(!nextButtonEnabled)
         }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.vertical, Theme.Spacing.lg)
     }
 
-    private var devToggle: some View {
-        Toggle(isOn: $isDevMode) {
-            Label("Use dev code fallback", systemImage: "hammer")
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.secondaryText)
-        }
-        .toggleStyle(.switch)
-        .tint(Theme.Colors.warning)
-        .padding(.top, Theme.Spacing.lg)
+    private var nextButtonEnabled: Bool {
+        isDevMode ? (!devCode.isEmpty && !isLoading) : (canSubmit)
     }
 
-    // MARK: - OTP Input Handling
+    // MARK: - OTP Input
 
     private func handleOTPInput(_ value: String) {
         let digits = value.filter(\.isNumber).prefix(6)
@@ -181,7 +191,7 @@ struct OTPVerificationView: View {
         for i in digits.count..<6 {
             otpDigits[i] = ""
         }
-        if digits.count < 6 { focusedIndex = digits.count }
+        if digits.count < 6 { focusedIndex = 0 }
         if digits.count == 6 { focusedIndex = nil }
     }
 
@@ -247,32 +257,6 @@ struct OTPVerificationView: View {
                 if cooldownSeconds > 0 { cooldownSeconds -= 1 }
                 else { cooldownTimer?.invalidate() }
             }
-        }
-    }
-}
-
-// MARK: - OTP Digit Box
-
-struct OTPDigitBox: View {
-    let digit: String
-    let isFocused: Bool
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                .fill(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(isFocused ? Theme.Colors.accent : Theme.Colors.border,
-                                lineWidth: isFocused ? 2 : 1)
-                )
-                .frame(width: 48, height: 56)
-                .shadow(color: isFocused ? Theme.Colors.accent.opacity(0.2) : .clear,
-                        radius: 6, x: 0, y: 2)
-
-            Text(digit)
-                .font(.system(size: 24, weight: .bold, design: .monospaced))
-                .foregroundColor(Theme.Colors.primaryText)
         }
     }
 }

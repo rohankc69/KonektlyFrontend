@@ -14,6 +14,9 @@ struct NameEntryView: View {
     @State private var lastName = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case first, last }
 
     private var isFirstNameValid: Bool {
         firstName.trimmingCharacters(in: .whitespaces).count >= 2
@@ -28,125 +31,90 @@ struct NameEntryView: View {
     }
 
     var body: some View {
-        ZStack {
-            Theme.Colors.background.ignoresSafeArea()
-
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxl) {
-                    // Progress indicator
-                    OnboardingProgress(currentStep: 1, totalSteps: 3)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                    // Header
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        Text("What's your name?")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(Theme.Colors.primaryText)
 
-                    headerSection
-                    formSection
+                        Text("Let us know how to properly address you")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    }
+                    .padding(.top, Theme.Spacing.xxl)
 
-                    if let error = errorMessage {
-                        ErrorBanner(message: error) { errorMessage = nil }
+                    // Form fields
+                    VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                        // First name
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("First name")
+                                .font(Theme.Typography.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(Theme.Colors.primaryText)
+
+                            TextField("Enter first name", text: $firstName)
+                                .font(Theme.Typography.body)
+                                .focused($focusedField, equals: .first)
+                                .autocorrectionDisabled()
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .stroke(
+                                            focusedField == .first ? Theme.Colors.inputBorderFocused : Color.clear,
+                                            lineWidth: 2
+                                        )
+                                )
+                        }
+
+                        // Last name
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("Last name")
+                                .font(Theme.Typography.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(Theme.Colors.primaryText)
+
+                            TextField("Enter last name", text: $lastName)
+                                .font(Theme.Typography.body)
+                                .focused($focusedField, equals: .last)
+                                .autocorrectionDisabled()
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .stroke(
+                                            focusedField == .last ? Theme.Colors.inputBorderFocused : Color.clear,
+                                            lineWidth: 2
+                                        )
+                                )
+                        }
                     }
 
-                    submitButton
-
-                    Spacer(minLength: Theme.Spacing.xxl)
+                    // Error
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.error)
+                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.xxl)
-                .padding(.bottom, Theme.Spacing.xxl)
-            }
-        }
-        .navigationTitle("Your Name")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Sign Out") { authStore.signOut() }
-                    .font(Theme.Typography.footnote)
-                    .foregroundColor(Theme.Colors.secondaryText)
-            }
-        }
-    }
-
-    // MARK: - Subviews
-
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text("What's your name?")
-                .font(Theme.Typography.title2)
-                .foregroundColor(Theme.Colors.primaryText)
-            Text("This will be visible on your profile.")
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
-        }
-    }
-
-    private var formSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("First Name")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.secondaryText)
-
-                TextField("Jane", text: $firstName)
-                    .font(Theme.Typography.body)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .autocorrectionDisabled()
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
-                            .stroke(borderColor(for: firstName, isValid: isFirstNameValid), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-
-                if !firstName.isEmpty && !isFirstNameValid {
-                    Text("At least 2 characters")
-                        .font(Theme.Typography.caption)
-                        .foregroundColor(Theme.Colors.error)
-                }
             }
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Last Name")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.secondaryText)
-
-                TextField("Doe", text: $lastName)
-                    .font(Theme.Typography.body)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .autocorrectionDisabled()
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
-                            .stroke(borderColor(for: lastName, isValid: isLastNameValid), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-
-                if !lastName.isEmpty && !isLastNameValid {
-                    Text("At least 2 characters")
-                        .font(Theme.Typography.caption)
-                        .foregroundColor(Theme.Colors.error)
-                }
-            }
+            // Bottom bar
+            OnboardingBottomBar(
+                onBack: { authStore.signOut() },
+                onNext: submit,
+                isLoading: isLoading,
+                isEnabled: canSubmit
+            )
         }
-    }
-
-    private var submitButton: some View {
-        Button(action: submit) {
-            if isLoading {
-                ProgressView().progressViewStyle(.circular).tint(.white)
-                    .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-            } else {
-                Text("Continue")
-                    .primaryButtonStyle(isEnabled: canSubmit)
-            }
-        }
-        .disabled(!canSubmit)
-        .frame(height: Theme.Sizes.buttonHeight)
-    }
-
-    // MARK: - Helpers
-
-    private func borderColor(for text: String, isValid: Bool) -> Color {
-        if text.isEmpty { return Theme.Colors.border }
-        return isValid ? Theme.Colors.accent : Theme.Colors.error
+        .background(Theme.Colors.background)
+        .navigationBarHidden(true)
     }
 
     private func submit() {
@@ -170,21 +138,51 @@ struct NameEntryView: View {
     }
 }
 
-// MARK: - Onboarding Progress Indicator (reusable)
+// MARK: - Reusable Onboarding Bottom Bar
 
-struct OnboardingProgress: View {
-    let currentStep: Int
-    let totalSteps: Int
+struct OnboardingBottomBar: View {
+    let onBack: () -> Void
+    let onNext: () -> Void
+    var isLoading: Bool = false
+    var isEnabled: Bool = true
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            ForEach(1...totalSteps, id: \.self) { step in
-                Capsule()
-                    .fill(step <= currentStep ? Theme.Colors.primary : Theme.Colors.border)
-                    .frame(height: 3)
+        HStack {
+            Button(action: onBack) {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(Theme.Colors.primaryText)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.Colors.cardBackground)
+                    .clipShape(Circle())
             }
+
+            Spacer()
+
+            Button(action: onNext) {
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .frame(width: 100, height: 48)
+                } else {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text("Next")
+                            .font(.system(size: 16, weight: .semibold))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .frame(height: 48)
+                }
+            }
+            .background(isEnabled && !isLoading ? Color.black : Color.black.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
+            .disabled(!isEnabled || isLoading)
         }
-        .padding(.horizontal, Theme.Spacing.sm)
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.vertical, Theme.Spacing.lg)
     }
 }
 

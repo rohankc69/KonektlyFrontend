@@ -39,6 +39,10 @@ struct Theme {
         static let border = Color(UIColor.separator)
         static let divider = Color(UIColor.separator)
         
+        // Input field background (light blue-gray like Uber)
+        static let inputBackground = Color(red: 0.93, green: 0.94, blue: 0.97)
+        static let inputBorderFocused = Color(red: 0.22, green: 0.35, blue: 0.96)
+        
         // Map overlay colors
         static let mapOverlayBackground = Color(UIColor.systemBackground).opacity(0.95)
         static let chipBackground = Color(UIColor.tertiarySystemBackground)

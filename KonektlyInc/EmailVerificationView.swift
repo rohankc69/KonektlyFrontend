@@ -9,6 +9,7 @@ import SwiftUI
 
 struct EmailVerificationView: View {
     @EnvironmentObject private var authStore: AuthStore
+    @Environment(\.dismiss) private var dismiss
 
     @State private var email: String = ""
     @State private var isSent = false
@@ -17,6 +18,7 @@ struct EmailVerificationView: View {
     @State private var successMessage: String?
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
+    @FocusState private var isEmailFocused: Bool
 
     // Deep-link / manual token entry
     @State private var manualToken = ""
@@ -33,195 +35,154 @@ struct EmailVerificationView: View {
     }
 
     var body: some View {
-        ZStack {
-            Theme.Colors.background.ignoresSafeArea()
-
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxxl) {
-                    // Progress indicator
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                    // Header
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        Text("Enter your email address")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(Theme.Colors.primaryText)
 
-                    headerSection
+                        Text("Add your email to aid in account recovery")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    }
+                    .padding(.top, Theme.Spacing.xxl)
 
                     if !isSent {
-                        emailInputSection
-                        sendButton
+                        // Email input
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text("Email")
+                                .font(Theme.Typography.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(Theme.Colors.primaryText)
+
+                            TextField("jon.mobbin2@gmail.com", text: $email)
+                                .keyboardType(.emailAddress)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(Theme.Typography.body)
+                                .focused($isEmailFocused, equals: true)
+                                .padding(Theme.Spacing.lg)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .stroke(
+                                            isEmailFocused ? Theme.Colors.inputBorderFocused : Color.clear,
+                                            lineWidth: 2
+                                        )
+                                )
+                        }
                     } else {
-                        sentConfirmationSection
-                        manualTokenSection
+                        // Sent confirmation
+                        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                            Text("We sent a verification link to \(email)")
+                                .font(Theme.Typography.subheadline)
+                                .foregroundColor(Theme.Colors.secondaryText)
+
+                            if cooldownSeconds > 0 {
+                                Text("Resend in \(cooldownSeconds)s")
+                                    .font(Theme.Typography.footnote)
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                            } else {
+                                Button("Resend verification link") {
+                                    Task { await resendVerification() }
+                                }
+                                .font(Theme.Typography.subheadline)
+                                .foregroundColor(Theme.Colors.accent)
+                            }
+
+                            Button("Change email address") {
+                                withAnimation { isSent = false }
+                            }
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.secondaryText)
+
+                            // Refresh status
+                            Button(action: { Task { await authStore.loadCurrentUser() } }) {
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    Image(systemName: "arrow.clockwise")
+                                    Text("I've verified - refresh status")
+                                }
+                                .font(Theme.Typography.bodySemibold)
+                                .foregroundColor(Theme.Colors.primaryText)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                            }
+                            .padding(.top, Theme.Spacing.sm)
+
+                            // Manual token entry
+                            Button(showManualEntry ? "Hide manual entry" : "Enter token manually") {
+                                withAnimation { showManualEntry.toggle() }
+                            }
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+
+                            if showManualEntry {
+                                TextField("Paste your verification token", text: $manualToken)
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                                    .font(Theme.Typography.footnote)
+                                    .padding(Theme.Spacing.md)
+                                    .background(Theme.Colors.inputBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+
+                                Button(action: verifyToken) {
+                                    if isVerifying {
+                                        ProgressView().progressViewStyle(.circular).tint(.white)
+                                            .frame(maxWidth: .infinity, minHeight: 40)
+                                    } else {
+                                        Text("Verify Token")
+                                            .font(Theme.Typography.headlineSemibold)
+                                            .foregroundColor(.white)
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 40)
+                                            .background(manualToken.isEmpty ? Color.black.opacity(0.3) : Color.black)
+                                            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                    }
+                                }
+                                .disabled(manualToken.isEmpty || isVerifying)
+                            }
+                        }
+                    }
+
+                    // Error / Success
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.footnote)
+                            .foregroundColor(Theme.Colors.error)
+                    }
+
+                    if let success = successMessage {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(Theme.Colors.success)
+                            Text(success)
+                                .font(Theme.Typography.footnote)
+                                .foregroundColor(Theme.Colors.success)
+                        }
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.huge)
-                .padding(.bottom, Theme.Spacing.xxl)
-            }
-        }
-        .navigationTitle("Verify Email")
-        .navigationBarTitleDisplayMode(.inline)
-        .onOpenURL { url in
-            handleDeepLink(url)
-        }
-    }
-
-    // MARK: - Subviews
-
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text(isSent ? "Check Your Inbox" : "Verify Email")
-                .font(Theme.Typography.title2)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            Text(isSent
-                 ? "We sent a link to \(email)"
-                 : "Add your email to unlock full access")
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
-                .multilineTextAlignment(.center)
-        }
-    }
-
-    private var emailInputSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("Email Address")
-                .font(Theme.Typography.headlineSemibold)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            TextField("you@example.com", text: $email)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(Theme.Typography.body)
-                .foregroundColor(Theme.Colors.primaryText)
-                .padding(Theme.Spacing.lg)
-                .background(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(email.isEmpty ? Theme.Colors.border
-                                : isEmailValid ? Theme.Colors.accent : Theme.Colors.error,
-                                lineWidth: 1.5)
-                )
-                .cornerRadius(Theme.CornerRadius.medium)
-
-            if let error = errorMessage {
-                ErrorBanner(message: error) { errorMessage = nil }
             }
 
-            if let success = successMessage {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(Theme.Colors.success)
-                    Text(success).font(Theme.Typography.footnote).foregroundColor(Theme.Colors.success)
-                }
-            }
-        }
-    }
-
-    private var sendButton: some View {
-        Button(action: sendVerification) {
-            if isLoading {
-                ProgressView().progressViewStyle(.circular).tint(.white)
-                    .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-            } else {
-                Text("Send Verification Link")
-                    .primaryButtonStyle(isEnabled: canSend)
-            }
-        }
-        .disabled(!canSend)
-        .frame(height: Theme.Sizes.buttonHeight)
-    }
-
-    private var sentConfirmationSection: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            // Resend
-            VStack(spacing: Theme.Spacing.sm) {
-                if cooldownSeconds > 0 {
-                    Text("Resend in \(cooldownSeconds)s")
-                        .font(Theme.Typography.footnote)
-                        .foregroundColor(Theme.Colors.secondaryText)
-                } else {
-                    Button("Resend verification link") {
-                        Task { await resendVerification() }
-                    }
-                    .font(Theme.Typography.bodyMedium)
-                    .foregroundColor(Theme.Colors.accent)
-                }
-
-                Button("Change email address") {
-                    withAnimation { isSent = false }
-                }
-                .font(Theme.Typography.footnote)
-                .foregroundColor(Theme.Colors.secondaryText)
-            }
-            .padding(.top, Theme.Spacing.sm)
-
-            if let error = errorMessage {
-                ErrorBanner(message: error) { errorMessage = nil }
-            }
-
-            if let success = successMessage {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(Theme.Colors.success)
-                    Text(success).font(Theme.Typography.footnote).foregroundColor(Theme.Colors.success)
-                }
-            }
-
-            // Refresh status button
-            Button(action: { Task { await authStore.loadCurrentUser() } }) {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("I've verified - refresh status")
-                }
-                .font(Theme.Typography.bodySemibold)
-                .foregroundColor(Theme.Colors.primaryText)
-                .frame(maxWidth: .infinity)
-                .frame(height: Theme.Sizes.buttonHeight)
-                .background(Theme.Colors.cardBackground)
-                .cornerRadius(Theme.CornerRadius.medium)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(Theme.Colors.border, lineWidth: 1)
+            // Bottom bar
+            if !isSent {
+                OnboardingBottomBar(
+                    onBack: { dismiss() },
+                    onNext: sendVerification,
+                    isLoading: isLoading,
+                    isEnabled: canSend
                 )
             }
         }
-    }
-
-    private var manualTokenSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Button(showManualEntry ? "Hide manual entry" : "Enter token manually") {
-                withAnimation { showManualEntry.toggle() }
-            }
-            .font(Theme.Typography.caption)
-            .foregroundColor(Theme.Colors.secondaryText)
-
-            if showManualEntry {
-                TextField("Paste your verification token", text: $manualToken)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .font(Theme.Typography.footnote)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                            .stroke(Theme.Colors.border, lineWidth: 1)
-                    )
-                    .cornerRadius(Theme.CornerRadius.medium)
-
-                Button(action: verifyToken) {
-                    if isVerifying {
-                        ProgressView().progressViewStyle(.circular).tint(.white)
-                            .frame(maxWidth: .infinity, minHeight: Theme.Sizes.smallButtonHeight)
-                    } else {
-                        Text("Verify Token")
-                            .font(Theme.Typography.headlineSemibold)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: Theme.Sizes.smallButtonHeight)
-                            .background(manualToken.isEmpty ? Theme.Colors.primary.opacity(0.4) : Theme.Colors.primary)
-                            .cornerRadius(Theme.CornerRadius.medium)
-                    }
-                }
-                .disabled(manualToken.isEmpty || isVerifying)
-            }
-        }
+        .background(Theme.Colors.background)
+        .navigationBarHidden(true)
+        .onOpenURL { handleDeepLink($0) }
     }
 
     // MARK: - Actions
@@ -239,7 +200,7 @@ struct EmailVerificationView: View {
                 withAnimation { isSent = true }
                 startCooldown(seconds: 60)
             } catch AppError.apiError(let code, _) where code == .emailAlreadyVerified {
-                successMessage = "This email is already verified!"
+                successMessage = "This email is already verified."
                 await authStore.loadCurrentUser()
             } catch AppError.rateLimited(let retryAfter) {
                 let secs = Int(retryAfter ?? 60)
@@ -259,7 +220,7 @@ struct EmailVerificationView: View {
         defer { isLoading = false }
         do {
             try await authStore.sendEmailVerification(email: email)
-            successMessage = "Verification link resent!"
+            successMessage = "Verification link resent."
             startCooldown(seconds: 60)
         } catch AppError.rateLimited(let retryAfter) {
             let secs = Int(retryAfter ?? 60)
@@ -281,7 +242,7 @@ struct EmailVerificationView: View {
             defer { isVerifying = false }
             do {
                 try await authStore.verifyEmailToken(manualToken)
-                successMessage = "Email verified successfully!"
+                successMessage = "Email verified successfully."
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {
@@ -291,7 +252,6 @@ struct EmailVerificationView: View {
     }
 
     private func handleDeepLink(_ url: URL) {
-        // Expected: konektly://verify-email?token=<token>
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let token = components.queryItems?.first(where: { $0.name == "token" })?.value
         else { return }
@@ -299,7 +259,7 @@ struct EmailVerificationView: View {
         Task {
             do {
                 try await authStore.verifyEmailToken(token)
-                successMessage = "Email verified successfully!"
+                successMessage = "Email verified successfully."
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {

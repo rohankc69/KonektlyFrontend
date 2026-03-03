@@ -16,11 +16,10 @@ struct PhoneLoginView: View {
     @State private var navigateToOTP = false
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
+    @FocusState private var isPhoneFocused: Bool
 
     private var formattedPhone: String {
-        // Strip whitespace/dashes; keep the + prefix
-        let stripped = phoneNumber.filter { $0.isNumber || $0 == "+" }
-        return stripped
+        phoneNumber.filter { $0.isNumber || $0 == "+" }
     }
 
     private var isPhoneValid: Bool {
@@ -34,97 +33,111 @@ struct PhoneLoginView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.Colors.background.ignoresSafeArea()
-
+            VStack(spacing: 0) {
                 ScrollView {
-                    VStack(spacing: Theme.Spacing.xxxl) {
-                        headerSection
-                        inputSection
-                        Spacer(minLength: Theme.Spacing.xxl)
-                        continueButton
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                        // Header
+                        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                            Text("Enter your mobile number")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(Theme.Colors.primaryText)
+                        }
+                        .padding(.top, Theme.Spacing.xxl)
+
+                        // Phone input
+                        HStack(spacing: Theme.Spacing.sm) {
+                            // Country code hint
+                            HStack(spacing: Theme.Spacing.xs) {
+                                Image(systemName: "globe")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                            }
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .frame(height: 52)
+                            .background(Theme.Colors.inputBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+
+                            // Phone field
+                            TextField("+1 Mobile number", text: $phoneNumber)
+                                .keyboardType(.phonePad)
+                                .font(Theme.Typography.body)
+                                .foregroundColor(Theme.Colors.primaryText)
+                                .focused($isPhoneFocused)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .padding(.horizontal, Theme.Spacing.lg)
+                                .frame(height: 52)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                                        .stroke(
+                                            isPhoneFocused ? Theme.Colors.inputBorderFocused : Color.clear,
+                                            lineWidth: 2
+                                        )
+                                )
+                        }
+
+                        // Error
+                        if let error = errorMessage {
+                            Text(error)
+                                .font(Theme.Typography.footnote)
+                                .foregroundColor(Theme.Colors.error)
+                        }
+
+                        // Consent text
+                        Text("By proceeding, you consent to get calls, SMS messages, including by automated dialer, from Konektly and its affiliates to the number provided.")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                            .padding(.top, Theme.Spacing.sm)
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
-                    .padding(.top, Theme.Spacing.huge)
-                    .padding(.bottom, Theme.Spacing.xxl)
                 }
+
+                // Bottom bar
+                HStack {
+                    // Back button (go to role picker)
+                    Button(action: {}) {
+                        Image(systemName: "arrow.left")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundColor(Theme.Colors.primaryText)
+                            .frame(width: 44, height: 44)
+                            .background(Theme.Colors.cardBackground)
+                            .clipShape(Circle())
+                    }
+
+                    Spacer()
+
+                    // Continue button
+                    Button(action: sendOTP) {
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .frame(width: 100, height: 48)
+                        } else {
+                            Text("Continue")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, Theme.Spacing.xl)
+                                .frame(height: 48)
+                        }
+                    }
+                    .background(canSubmit ? Color.black : Color.black.opacity(0.3))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
+                    .disabled(!canSubmit)
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.vertical, Theme.Spacing.lg)
             }
+            .background(Theme.Colors.background)
+            .navigationBarHidden(true)
             .navigationDestination(isPresented: $navigateToOTP) {
                 OTPVerificationView(phoneNumber: formattedPhone)
             }
-            .navigationBarHidden(true)
-        }
-    }
-
-    // MARK: - Subviews
-
-    private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            Text("Sign In")
-                .font(Theme.Typography.largeTitle)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            Text("Enter your phone number to get started")
-                .font(Theme.Typography.subheadline)
-                .foregroundColor(Theme.Colors.secondaryText)
-        }
-    }
-
-    private var inputSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("Phone Number")
-                .font(Theme.Typography.headlineSemibold)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            HStack(spacing: Theme.Spacing.sm) {
-                // Country code hint
-                Image(systemName: "globe")
-                    .font(.system(size: 22))
-                    .foregroundColor(Theme.Colors.secondaryText)
-
-                TextField("+1 (555) 000-0000", text: $phoneNumber)
-                    .keyboardType(.phonePad)
-                    .font(Theme.Typography.body)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            }
-            .padding(Theme.Spacing.lg)
-            .background(Theme.Colors.cardBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                    .stroke(phoneNumber.isEmpty ? Theme.Colors.border : Theme.Colors.accent, lineWidth: 1.5)
-            )
-            .cornerRadius(Theme.CornerRadius.medium)
-
-            if let error = errorMessage {
-                ErrorBanner(message: error) { errorMessage = nil }
-            }
-
-            Text("Include your country code, e.g. +1 for Canada/US")
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.secondaryText)
-        }
-    }
-
-    private var continueButton: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            Button(action: sendOTP) {
-                if isLoading {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(.white)
-                        .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
-                } else if cooldownSeconds > 0 {
-                    Text("Resend in \(cooldownSeconds)s")
-                        .primaryButtonStyle(isEnabled: false)
-                } else {
-                    Text("Send Code")
-                        .primaryButtonStyle(isEnabled: canSubmit)
-                }
-            }
-            .disabled(!canSubmit)
-            .frame(height: Theme.Sizes.buttonHeight)
         }
     }
 
@@ -157,11 +170,8 @@ struct PhoneLoginView: View {
         cooldownTimer?.invalidate()
         cooldownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             DispatchQueue.main.async {
-                if cooldownSeconds > 0 {
-                    cooldownSeconds -= 1
-                } else {
-                    cooldownTimer?.invalidate()
-                }
+                if cooldownSeconds > 0 { cooldownSeconds -= 1 }
+                else { cooldownTimer?.invalidate() }
             }
         }
     }
