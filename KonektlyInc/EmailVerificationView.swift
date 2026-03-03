@@ -38,6 +38,9 @@ struct EmailVerificationView: View {
 
             ScrollView {
                 VStack(spacing: Theme.Spacing.xxxl) {
+                    // Progress indicator
+                    OnboardingProgress(currentStep: 1, totalSteps: 4)
+
                     headerSection
 
                     if !isSent {
@@ -63,24 +66,15 @@ struct EmailVerificationView: View {
     // MARK: - Subviews
 
     private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(Theme.Colors.accent.opacity(0.12))
-                    .frame(width: 100, height: 100)
-                Image(systemName: isSent ? "envelope.badge.checkmark.fill" : "envelope.fill")
-                    .font(.system(size: 48))
-                    .foregroundColor(Theme.Colors.accent)
-            }
-
-            Text(isSent ? "Check Your Inbox" : "Verify Your Email")
-                .font(Theme.Typography.largeTitle)
+        VStack(spacing: Theme.Spacing.sm) {
+            Text(isSent ? "Check Your Inbox" : "Verify Email")
+                .font(Theme.Typography.title2)
                 .foregroundColor(Theme.Colors.primaryText)
 
             Text(isSent
-                 ? "We sent a verification link to\n\(email)"
-                 : "Add and verify your email address to unlock full access")
-                .font(Theme.Typography.body)
+                 ? "We sent a link to \(email)"
+                 : "Add your email to unlock full access")
+                .font(Theme.Typography.subheadline)
                 .foregroundColor(Theme.Colors.secondaryText)
                 .multilineTextAlignment(.center)
         }

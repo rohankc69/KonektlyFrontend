@@ -7,40 +7,21 @@ struct SplashScreenView: View {
     
     var body: some View {
         ZStack {
-            // Gradient background (Uber-inspired)
-            LinearGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.05, blue: 0.05),
-                    Color.black
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            Color(red: 0.05, green: 0.05, blue: 0.08)
+                .ignoresSafeArea()
             
-            VStack(spacing: 20) {
-                // Logo icon (using SF Symbol as placeholder)
-                Image(systemName: "person.2.badge.gearshape.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 80, height: 80)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Theme.accentColor, Theme.accentColor.opacity(0.7)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+            VStack(spacing: 16) {
+                Text("K")
+                    .font(.system(size: 52, weight: .black, design: .rounded))
+                    .foregroundColor(Theme.Colors.accent)
                 
-                // App name
                 Text("Konektly")
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                 
-                // Tagline
                 Text("On-Demand Staffing")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
             }
             .scaleEffect(scale)
             .opacity(opacity)

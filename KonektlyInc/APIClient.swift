@@ -178,10 +178,22 @@ actor APIClient {
             print("[API] Response body: \(truncated)")
         }
 
-        // Rate limit
+        // Rate limit (429)
         if httpResponse.statusCode == 429 {
             let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
             throw AppError.rateLimited(retryAfter: retryAfter)
+        }
+
+        // Conflict (409) - profile already verified / non-editable
+        if httpResponse.statusCode == 409 {
+            let msg = parseErrorMessage(data: data) ?? "This profile is already verified and cannot be changed."
+            throw AppError.conflict(message: msg)
+        }
+
+        // Service unavailable (503) - OTP service down
+        if httpResponse.statusCode == 503 {
+            let msg = parseErrorMessage(data: data) ?? "Service is temporarily unavailable. Please try again later."
+            throw AppError.serviceUnavailable(message: msg)
         }
 
         // Unauthorised - try token refresh once
@@ -246,6 +258,15 @@ actor APIClient {
     }
 
     // MARK: - Decode Response
+
+    private func parseErrorMessage(data: Data) -> String? {
+        if let envelope = try? decoder.decode(APIResponse<EmptyResponse>.self, from: data) {
+            return envelope.error?.message
+        }
+        return nil
+    }
+
+    private struct EmptyResponse: Decodable, Sendable {}
 
     private func decodeResponse<T: Decodable>(data: Data, statusCode: Int) throws -> T {
         do {
@@ -318,14 +339,14 @@ extension Endpoint {
                  body: AnyEncodable(SendOTPRequest(phone: phone)))
     }
 
-    static func verifyOTPFirebase(phone: String, idToken: String) -> Endpoint {
+    static func verifyOTPFirebase(phone: String, profileType: String, idToken: String) -> Endpoint {
         Endpoint(path: "/api/v1/auth/phone/verify-otp/", method: .post,
-                 body: AnyEncodable(VerifyOTPFirebaseRequest(phone: phone, id_token: idToken)))
+                 body: AnyEncodable(VerifyOTPFirebaseRequest(phone: phone, profile_type: profileType, id_token: idToken)))
     }
 
-    static func verifyOTPDev(phone: String, code: String) -> Endpoint {
+    static func verifyOTPDev(phone: String, profileType: String, code: String) -> Endpoint {
         Endpoint(path: "/api/v1/auth/phone/verify-otp/", method: .post,
-                 body: AnyEncodable(VerifyOTPDevRequest(phone: phone, code: code)))
+                 body: AnyEncodable(VerifyOTPDevRequest(phone: phone, profile_type: profileType, code: code)))
     }
 
     static let me = Endpoint(path: "/api/v1/auth/me/", method: .get)
@@ -347,6 +368,18 @@ extension Endpoint {
 
     static func createBusinessProfile(_ req: BusinessProfileCreateRequest) -> Endpoint {
         Endpoint(path: "/api/v1/profiles/business/create/", method: .post,
+                 body: AnyEncodable(req))
+    }
+
+    // Name update (step 4)
+    static func updateName(_ req: NameUpdateRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/profile/name/", method: .patch,
+                 body: AnyEncodable(req))
+    }
+
+    // Terms accept (step 5)
+    static func acceptTerms(_ req: TermsAcceptRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/terms/accept/", method: .post,
                  body: AnyEncodable(req))
     }
 

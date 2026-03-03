@@ -144,7 +144,7 @@ final class APIResponseDecodingTests: XCTestCase {
         {
             "success": true,
             "data": {
-                "worker_status": {"id": 1},
+                "worker_status": "pending",
                 "business_status": null,
                 "is_active_profile": false,
                 "access_tier": "phone_verified"
@@ -186,13 +186,13 @@ final class EndpointTests: XCTestCase {
     }
 
     func test_verifyOTPFirebase_path() {
-        let ep = Endpoint.verifyOTPFirebase(phone: "+15550001234", idToken: "firebase_id_token")
+        let ep = Endpoint.verifyOTPFirebase(phone: "+15550001234", profileType: "worker", idToken: "firebase_id_token")
         XCTAssertEqual(ep.path, "/api/v1/auth/phone/verify-otp/")
         XCTAssertEqual(ep.method, .post)
     }
 
     func test_verifyOTPDev_path() {
-        let ep = Endpoint.verifyOTPDev(phone: "+15550001234", code: "123456")
+        let ep = Endpoint.verifyOTPDev(phone: "+15550001234", profileType: "worker", code: "123456")
         XCTAssertEqual(ep.path, "/api/v1/auth/phone/verify-otp/")
     }
 
@@ -215,8 +215,7 @@ final class EndpointTests: XCTestCase {
 
     func test_createWorkerProfile_path() {
         let req = WorkerProfileCreateRequest(
-            firstName: "Jane", lastName: "Doe",
-            bio: "Test", skills: [], hourlyRate: 20, availableFrom: nil
+            govIdNumber: "DL123456", govIdType: "drivers_license"
         )
         let ep = Endpoint.createWorkerProfile(req)
         XCTAssertEqual(ep.path, "/api/v1/profiles/worker/create/")
@@ -225,8 +224,8 @@ final class EndpointTests: XCTestCase {
 
     func test_createBusinessProfile_path() {
         let req = BusinessProfileCreateRequest(
-            businessName: "Acme", industry: "Retail",
-            description: "Test", website: nil
+            businessId: "BN123",
+            businessName: "Acme", managerGovIdNumber: "MG456"
         )
         let ep = Endpoint.createBusinessProfile(req)
         XCTAssertEqual(ep.path, "/api/v1/profiles/business/create/")
@@ -301,12 +300,13 @@ final class AuthStoreTests: XCTestCase {
         XCTAssertNil(AuthStore.shared.accessTier)
     }
 
-    func test_needsEmailVerification_falseWhenUnauthenticated() {
-        XCTAssertFalse(AuthStore.shared.needsEmailVerification)
+    func test_onboardingStep_emailWhenUnauthenticated() {
+        // When unauthenticated (no user), onboardingStep defaults to .email
+        XCTAssertEqual(AuthStore.shared.onboardingStep, .email)
     }
 
-    func test_needsProfile_falseWhenUnauthenticated() {
-        XCTAssertFalse(AuthStore.shared.needsProfile)
+    func test_needsOnboarding_trueWhenUnauthenticated() {
+        XCTAssertTrue(AuthStore.shared.needsOnboarding)
     }
 
     func test_clearError_nilsError() {
@@ -325,32 +325,42 @@ final class ProfileRequestEncodingTests: XCTestCase {
 
     func test_workerProfile_encodesSnakeCaseKeys() throws {
         let req = WorkerProfileCreateRequest(
-            firstName: "Jane",
-            lastName: "Doe",
-            bio: "Swift dev",
-            skills: ["iOS", "Swift"],
-            hourlyRate: 35.0,
-            availableFrom: nil
+            govIdNumber: "DL123456",
+            govIdType: "drivers_license"
         )
         let data = try encoder.encode(req)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertEqual(json?["first_name"] as? String, "Jane")
-        XCTAssertEqual(json?["last_name"] as? String, "Doe")
-        XCTAssertEqual(json?["hourly_rate"] as? Double, 35.0)
-        XCTAssertEqual(json?["skills"] as? [String], ["iOS", "Swift"])
+        XCTAssertEqual(json?["gov_id_number"] as? String, "DL123456")
+        XCTAssertEqual(json?["gov_id_type"] as? String, "drivers_license")
     }
 
     func test_businessProfile_encodesSnakeCaseKeys() throws {
         let req = BusinessProfileCreateRequest(
+            businessId: "BN123456",
             businessName: "Acme Corp",
-            industry: "Retail",
-            description: "Test business",
-            website: "https://acme.com"
+            managerGovIdNumber: "MG789"
         )
         let data = try encoder.encode(req)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["business_id"] as? String, "BN123456")
         XCTAssertEqual(json?["business_name"] as? String, "Acme Corp")
-        XCTAssertEqual(json?["website"] as? String, "https://acme.com")
+        XCTAssertEqual(json?["manager_gov_id_number"] as? String, "MG789")
+    }
+
+    func test_nameUpdateRequest_encodesSnakeCaseKeys() throws {
+        let req = NameUpdateRequest(firstName: "Jane", lastName: "Doe")
+        let data = try encoder.encode(req)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["first_name"] as? String, "Jane")
+        XCTAssertEqual(json?["last_name"] as? String, "Doe")
+    }
+
+    func test_termsAcceptRequest_encodesCorrectly() throws {
+        let req = TermsAcceptRequest(accepted: true, termsVersion: "2026-03-03")
+        let data = try encoder.encode(req)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["accepted"] as? Bool, true)
+        XCTAssertEqual(json?["terms_version"] as? String, "2026-03-03")
     }
 }
 

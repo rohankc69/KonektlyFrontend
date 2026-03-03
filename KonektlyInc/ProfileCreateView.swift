@@ -1,5 +1,5 @@
 //
-//  WorkerProfileCreateView.swift
+//  ProfileCreateView.swift
 //  KonektlyInc
 //
 //  Created by Rohan on 2026-02-23.
@@ -7,22 +7,30 @@
 
 import SwiftUI
 
+// MARK: - Worker Profile Create View
+
 struct WorkerProfileCreateView: View {
     @EnvironmentObject private var authStore: AuthStore
 
-    @State private var firstName = ""
-    @State private var lastName = ""
-    @State private var bio = ""
-    @State private var skillInput = ""
-    @State private var skills: [String] = []
-    @State private var hourlyRate: Double = 18.0
+    @State private var govIdNumber = ""
+    @State private var govIdType = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
 
+    private let govIdTypes = [
+        "drivers_license", "passport", "national_id", "state_id"
+    ]
+
+    private let govIdTypeLabels: [String: String] = [
+        "drivers_license": "Driver's License",
+        "passport": "Passport",
+        "national_id": "National ID",
+        "state_id": "State ID"
+    ]
+
     private var isValid: Bool {
-        !firstName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !lastName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        hourlyRate >= 1
+        !govIdNumber.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !govIdType.isEmpty
     }
 
     var body: some View {
@@ -30,142 +38,78 @@ struct WorkerProfileCreateView: View {
             Theme.Colors.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxxl) {
+                VStack(spacing: Theme.Spacing.xxl) {
+                    // Progress indicator
+                    OnboardingProgress(currentStep: 4, totalSteps: 4)
+
                     headerSection
                     formSection
-                    skillsSection
-                    rateSection
 
                     if let error = errorMessage {
                         ErrorBanner(message: error) { errorMessage = nil }
-                            .padding(.horizontal)
                     }
 
                     submitButton
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.xxl)
                 .padding(.bottom, Theme.Spacing.xxl)
             }
         }
-        .navigationTitle("Worker Profile")
+        .navigationTitle("Your Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Sign Out") { authStore.signOut() }
+                    .font(Theme.Typography.footnote)
+                    .foregroundColor(Theme.Colors.secondaryText)
+            }
+        }
     }
 
-    // MARK: - Subviews
-
     private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(Theme.Colors.accent.opacity(0.12))
-                    .frame(width: 90, height: 90)
-                Image(systemName: "person.badge.plus.fill")
-                    .font(.system(size: 44))
-                    .foregroundColor(Theme.Colors.accent)
-            }
-            Text("Build Your Profile")
-                .font(Theme.Typography.title1)
+        VStack(spacing: Theme.Spacing.sm) {
+            Text("Verify Your Identity")
+                .font(Theme.Typography.title2)
                 .foregroundColor(Theme.Colors.primaryText)
-            Text("Help businesses find and hire you")
-                .font(Theme.Typography.body)
+            Text("We need your government ID to get you verified.")
+                .font(Theme.Typography.subheadline)
                 .foregroundColor(Theme.Colors.secondaryText)
         }
     }
 
     private var formSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            ProfileTextField(label: "First Name", placeholder: "Jane", text: $firstName)
-            ProfileTextField(label: "Last Name", placeholder: "Doe", text: $lastName)
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("ID Type")
+                    .font(Theme.Typography.subheadline)
+                    .foregroundColor(Theme.Colors.secondaryText)
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("Bio")
-                    .font(Theme.Typography.headlineSemibold)
-                    .foregroundColor(Theme.Colors.primaryText)
-
-                ZStack(alignment: .topLeading) {
-                    if bio.isEmpty {
-                        Text("Tell businesses about yourself…")
+                Menu {
+                    ForEach(govIdTypes, id: \.self) { type in
+                        Button(govIdTypeLabels[type] ?? type) { govIdType = type }
+                    }
+                } label: {
+                    HStack {
+                        Text(govIdType.isEmpty ? "Select ID type" : (govIdTypeLabels[govIdType] ?? govIdType))
                             .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.secondaryText.opacity(0.7))
-                            .padding(.horizontal, 4)
-                            .padding(.top, 8)
+                            .foregroundColor(govIdType.isEmpty ? Theme.Colors.secondaryText : Theme.Colors.primaryText)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .foregroundColor(Theme.Colors.secondaryText)
+                            .font(.system(size: 12))
                     }
-                    TextEditor(text: $bio)
-                        .font(Theme.Typography.body)
-                        .foregroundColor(Theme.Colors.primaryText)
-                        .frame(minHeight: 100)
-                        .scrollContentBackground(.hidden)
-                }
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(Theme.Colors.border, lineWidth: 1)
-                )
-                .cornerRadius(Theme.CornerRadius.medium)
-            }
-        }
-    }
-
-    private var skillsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("Skills")
-                .font(Theme.Typography.headlineSemibold)
-                .foregroundColor(Theme.Colors.primaryText)
-
-            HStack {
-                TextField("e.g. Barista, Forklift, Excel", text: $skillInput)
-                    .font(Theme.Typography.body)
-                    .foregroundColor(Theme.Colors.primaryText)
-                    .submitLabel(.done)
-                    .onSubmit { addSkill() }
-
-                Button(action: addSkill) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 26))
-                        .foregroundColor(skillInput.isEmpty ? Theme.Colors.border : Theme.Colors.accent)
-                }
-                .disabled(skillInput.isEmpty)
-            }
-            .padding(Theme.Spacing.md)
-            .background(Theme.Colors.cardBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                    .stroke(Theme.Colors.border, lineWidth: 1)
-            )
-            .cornerRadius(Theme.CornerRadius.medium)
-
-            if !skills.isEmpty {
-                FlowLayout(spacing: Theme.Spacing.sm) {
-                    ForEach(skills, id: \.self) { skill in
-                        SkillChip(skill: skill) { removeSkill(skill) }
-                    }
+                    .padding(Theme.Spacing.md)
+                    .background(Theme.Colors.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                            .stroke(Theme.Colors.border, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
                 }
             }
-        }
-    }
 
-    private var rateSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack {
-                Text("Hourly Rate")
-                    .font(Theme.Typography.headlineSemibold)
-                    .foregroundColor(Theme.Colors.primaryText)
-                Spacer()
-                Text(String(format: "$%.0f/hr", hourlyRate))
-                    .font(Theme.Typography.headlineBold)
-                    .foregroundColor(Theme.Colors.accent)
-            }
-
-            Slider(value: $hourlyRate, in: 15...100, step: 1)
-                .tint(Theme.Colors.accent)
-
-            HStack {
-                Text("$15").font(Theme.Typography.caption).foregroundColor(Theme.Colors.secondaryText)
-                Spacer()
-                Text("$100").font(Theme.Typography.caption).foregroundColor(Theme.Colors.secondaryText)
-            }
+            ProfileTextField(label: "ID Number", placeholder: "Enter your ID number", text: $govIdNumber)
         }
     }
 
@@ -175,25 +119,12 @@ struct WorkerProfileCreateView: View {
                 ProgressView().progressViewStyle(.circular).tint(.white)
                     .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
             } else {
-                Text("Create Profile")
+                Text("Continue")
                     .primaryButtonStyle(isEnabled: isValid)
             }
         }
         .disabled(!isValid || isLoading)
         .frame(height: Theme.Sizes.buttonHeight)
-    }
-
-    // MARK: - Actions
-
-    private func addSkill() {
-        let trimmed = skillInput.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !skills.contains(trimmed) else { return }
-        skills.append(trimmed)
-        skillInput = ""
-    }
-
-    private func removeSkill(_ skill: String) {
-        skills.removeAll { $0 == skill }
     }
 
     private func submit() {
@@ -202,18 +133,16 @@ struct WorkerProfileCreateView: View {
         errorMessage = nil
 
         let req = WorkerProfileCreateRequest(
-            firstName: firstName.trimmingCharacters(in: .whitespaces),
-            lastName: lastName.trimmingCharacters(in: .whitespaces),
-            bio: bio.trimmingCharacters(in: .whitespaces),
-            skills: skills,
-            hourlyRate: hourlyRate,
-            availableFrom: nil
+            govIdNumber: govIdNumber.trimmingCharacters(in: .whitespaces),
+            govIdType: govIdType
         )
 
         Task {
             defer { isLoading = false }
             do {
                 try await authStore.createWorkerProfile(req)
+            } catch AppError.conflict(let msg) {
+                errorMessage = msg
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {
@@ -228,63 +157,59 @@ struct WorkerProfileCreateView: View {
 struct BusinessProfileCreateView: View {
     @EnvironmentObject private var authStore: AuthStore
 
+    @State private var businessId = ""
     @State private var businessName = ""
-    @State private var industry = ""
-    @State private var description = ""
-    @State private var website = ""
+    @State private var managerGovIdNumber = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
 
     private var isValid: Bool {
+        !businessId.trimmingCharacters(in: .whitespaces).isEmpty &&
         !businessName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !industry.trimmingCharacters(in: .whitespaces).isEmpty
+        !managerGovIdNumber.trimmingCharacters(in: .whitespaces).isEmpty
     }
-
-    private let industries = [
-        "Hospitality", "Retail", "Warehousing", "Construction",
-        "Healthcare", "Food & Beverage", "Events", "Logistics", "Other"
-    ]
 
     var body: some View {
         ZStack {
             Theme.Colors.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: Theme.Spacing.xxxl) {
+                VStack(spacing: Theme.Spacing.xxl) {
+                    // Progress indicator
+                    OnboardingProgress(currentStep: 4, totalSteps: 4)
+
                     headerSection
                     formSection
 
                     if let error = errorMessage {
                         ErrorBanner(message: error) { errorMessage = nil }
-                            .padding(.horizontal)
                     }
 
                     submitButton
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.xxl)
                 .padding(.bottom, Theme.Spacing.xxl)
             }
         }
-        .navigationTitle("Business Profile")
+        .navigationTitle("Business Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Sign Out") { authStore.signOut() }
+                    .font(Theme.Typography.footnote)
+                    .foregroundColor(Theme.Colors.secondaryText)
+            }
+        }
     }
 
     private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(Theme.Colors.accent.opacity(0.12))
-                    .frame(width: 90, height: 90)
-                Image(systemName: "briefcase.fill")
-                    .font(.system(size: 44))
-                    .foregroundColor(Theme.Colors.accent)
-            }
-            Text("Set Up Your Business")
-                .font(Theme.Typography.title1)
+        VStack(spacing: Theme.Spacing.sm) {
+            Text("Business Verification")
+                .font(Theme.Typography.title2)
                 .foregroundColor(Theme.Colors.primaryText)
-            Text("Let workers find and apply to your shifts")
-                .font(Theme.Typography.body)
+            Text("Provide your business info to get verified.")
+                .font(Theme.Typography.subheadline)
                 .foregroundColor(Theme.Colors.secondaryText)
         }
     }
@@ -292,65 +217,8 @@ struct BusinessProfileCreateView: View {
     private var formSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             ProfileTextField(label: "Business Name", placeholder: "Acme Corp", text: $businessName)
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("Industry")
-                    .font(Theme.Typography.headlineSemibold)
-                    .foregroundColor(Theme.Colors.primaryText)
-
-                Menu {
-                    ForEach(industries, id: \.self) { ind in
-                        Button(ind) { industry = ind }
-                    }
-                } label: {
-                    HStack {
-                        Text(industry.isEmpty ? "Select industry" : industry)
-                            .font(Theme.Typography.body)
-                            .foregroundColor(industry.isEmpty ? Theme.Colors.secondaryText : Theme.Colors.primaryText)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .font(.system(size: 12))
-                    }
-                    .padding(Theme.Spacing.lg)
-                    .background(Theme.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                            .stroke(Theme.Colors.border, lineWidth: 1)
-                    )
-                    .cornerRadius(Theme.CornerRadius.medium)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("Description")
-                    .font(Theme.Typography.headlineSemibold)
-                    .foregroundColor(Theme.Colors.primaryText)
-
-                ZStack(alignment: .topLeading) {
-                    if description.isEmpty {
-                        Text("Describe your business…")
-                            .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.secondaryText.opacity(0.7))
-                            .padding(.horizontal, 4)
-                            .padding(.top, 8)
-                    }
-                    TextEditor(text: $description)
-                        .font(Theme.Typography.body)
-                        .foregroundColor(Theme.Colors.primaryText)
-                        .frame(minHeight: 100)
-                        .scrollContentBackground(.hidden)
-                }
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.cardBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(Theme.Colors.border, lineWidth: 1)
-                )
-                .cornerRadius(Theme.CornerRadius.medium)
-            }
-
-            ProfileTextField(label: "Website (optional)", placeholder: "https://acmecorp.com", text: $website)
+            ProfileTextField(label: "Business ID", placeholder: "e.g. BN123456789", text: $businessId)
+            ProfileTextField(label: "Manager Gov ID", placeholder: "Manager ID number", text: $managerGovIdNumber)
         }
     }
 
@@ -360,7 +228,7 @@ struct BusinessProfileCreateView: View {
                 ProgressView().progressViewStyle(.circular).tint(.white)
                     .frame(maxWidth: .infinity, minHeight: Theme.Sizes.buttonHeight)
             } else {
-                Text("Create Profile")
+                Text("Continue")
                     .primaryButtonStyle(isEnabled: isValid)
             }
         }
@@ -374,16 +242,17 @@ struct BusinessProfileCreateView: View {
         errorMessage = nil
 
         let req = BusinessProfileCreateRequest(
+            businessId: businessId.trimmingCharacters(in: .whitespaces),
             businessName: businessName.trimmingCharacters(in: .whitespaces),
-            industry: industry,
-            description: description.trimmingCharacters(in: .whitespaces),
-            website: website.isEmpty ? nil : website
+            managerGovIdNumber: managerGovIdNumber.trimmingCharacters(in: .whitespaces)
         )
 
         Task {
             defer { isLoading = false }
             do {
                 try await authStore.createBusinessProfile(req)
+            } catch AppError.conflict(let msg) {
+                errorMessage = msg
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {
@@ -402,52 +271,24 @@ struct ProfileTextField: View {
     var keyboardType: UIKeyboardType = .default
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(label)
-                .font(Theme.Typography.headlineSemibold)
-                .foregroundColor(Theme.Colors.primaryText)
+                .font(Theme.Typography.subheadline)
+                .foregroundColor(Theme.Colors.secondaryText)
 
             TextField(placeholder, text: $text)
                 .keyboardType(keyboardType)
                 .font(Theme.Typography.body)
                 .foregroundColor(Theme.Colors.primaryText)
                 .autocorrectionDisabled()
-                .padding(Theme.Spacing.lg)
+                .padding(Theme.Spacing.md)
                 .background(Theme.Colors.cardBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                        .stroke(text.isEmpty ? Theme.Colors.border : Theme.Colors.accent, lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
+                        .stroke(Theme.Colors.border, lineWidth: 1)
                 )
-                .cornerRadius(Theme.CornerRadius.medium)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
         }
-    }
-}
-
-// MARK: - Skill Chip
-
-struct SkillChip: View {
-    let skill: String
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Text(skill)
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.primaryText)
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(Theme.Colors.secondaryText)
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.xs)
-        .background(Theme.Colors.chipBackground)
-        .cornerRadius(Theme.CornerRadius.pill)
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.CornerRadius.pill)
-                .stroke(Theme.Colors.border, lineWidth: 1)
-        )
     }
 }
 

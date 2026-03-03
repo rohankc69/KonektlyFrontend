@@ -61,24 +61,19 @@ struct OTPVerificationView: View {
     // MARK: - Subviews
 
     private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 56))
-                .foregroundColor(Theme.Colors.accent)
-
-            Text("Enter Verification Code")
-                .font(Theme.Typography.title1)
+        VStack(spacing: Theme.Spacing.sm) {
+            Text("Enter Code")
+                .font(Theme.Typography.largeTitle)
                 .foregroundColor(Theme.Colors.primaryText)
 
             Group {
-                Text("We sent a 6-digit code to\n")
+                Text("Sent to ")
                     .foregroundColor(Theme.Colors.secondaryText)
                 + Text(phoneNumber)
                     .foregroundColor(Theme.Colors.primaryText)
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
             }
-            .font(Theme.Typography.body)
-            .multilineTextAlignment(.center)
+            .font(Theme.Typography.subheadline)
         }
     }
 
@@ -210,10 +205,13 @@ struct OTPVerificationView: View {
                 let secs = Int(retryAfter ?? 60)
                 startCooldown(seconds: secs)
                 errorMessage = "Too many attempts. Please wait \(secs) seconds."
+            } catch AppError.serviceUnavailable(let msg) {
+                errorMessage = msg
+            } catch AppError.conflict(let msg) {
+                errorMessage = msg
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
-                // Clear digits on wrong code
-                if case .apiError(let code, _) = appError, code == .otpInvalid {
+                if case .apiError(let code, _) = appError, code == .otpInvalid || code == .invalidOTP {
                     otpDigits = Array(repeating: "", count: 6)
                     focusedIndex = 0
                 }

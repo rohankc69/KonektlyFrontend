@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct AppRootView: View {
-    // Session-only flag: role picker shows once per cold launch
     @State private var hasPickedRole = false
     @State private var selectedTab = 0
 
@@ -17,27 +16,17 @@ struct AppRootView: View {
     var body: some View {
         Group {
             if !hasPickedRole {
-                // 1. Role picker - always the first screen after splash
+                // Step 1: Role picker - must select worker/business before login
                 RolePickerView(hasCompletedOnboarding: $hasPickedRole)
             } else if !authStore.isAuthenticated {
-                // 2. Phone login / OTP
+                // Step 2: Phone login + OTP
                 PhoneLoginView()
-            } else if authStore.needsEmailVerification && !authStore.needsProfile {
-                // 3. Email verification (soft gate - can skip if profile still needed)
-                NavigationStack {
-                    EmailVerificationView()
-                }
-            } else if authStore.needsProfile {
-                // 4. Profile creation
-                profileCreationView
             } else {
-                // 5. Main app tabs
-                mainTabView
+                // Steps 3-7: Authenticated - route based on backend state
+                authenticatedFlow
             }
         }
         .onOpenURL { url in
-            // Handle email verification deep links
-            // konektly://verify-email?token=<token>
             if url.host == "verify-email",
                let token = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                    .queryItems?.first(where: { $0.name == "token" })?.value {
@@ -46,18 +35,49 @@ struct AppRootView: View {
         }
     }
 
+    // MARK: - Authenticated Flow
+
+    @ViewBuilder
+    private var authenticatedFlow: some View {
+        switch authStore.onboardingStep {
+        case .email:
+            // Step 3: Email verification
+            NavigationStack {
+                EmailVerificationView()
+            }
+
+        case .name:
+            // Step 4: Name entry
+            NavigationStack {
+                NameEntryView()
+            }
+
+        case .terms:
+            // Step 5: Terms acceptance
+            NavigationStack {
+                TermsAcceptView()
+            }
+
+        case .profileDetails:
+            // Step 6: Gov ID / Business details
+            NavigationStack {
+                profileCreationView
+            }
+
+        case .complete:
+            // Step 7: Main dashboard
+            mainTabView
+        }
+    }
+
     // MARK: - Profile Creation (role-aware)
 
     @ViewBuilder
     private var profileCreationView: some View {
-        let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
-        let role = UserRole(rawValue: roleRaw) ?? .worker
-        NavigationStack {
-            if role == .worker {
-                WorkerProfileCreateView()
-            } else {
-                BusinessProfileCreateView()
-            }
+        if authStore.selectedRole == .worker {
+            WorkerProfileCreateView()
+        } else {
+            BusinessProfileCreateView()
         }
     }
 
@@ -77,7 +97,6 @@ struct AppRootView: View {
                 .tabItem { Label("Messages", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(2)
 
-            // Verification status replaces plain profile tab - user can still edit profile from within
             VerificationStatusView()
                 .tabItem { Label("Account", systemImage: "person.fill") }
                 .tag(3)

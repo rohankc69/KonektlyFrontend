@@ -11,36 +11,35 @@ struct Theme {
     
     // MARK: - Colors (Uber-inspired palette with Dark Mode support)
     struct Colors {
-        // Primary colors - adaptive for light/dark mode
-        static let primary = Color.primary // Adapts automatically
-        static let secondary = Color.secondary // Adapts automatically
-        static let accent = Color(red: 0.0, green: 0.8, blue: 0.4) // Green accent
+        static let primary = Color.primary
+        static let secondary = Color.secondary
+        static let accent = Color(red: 0.22, green: 0.35, blue: 0.96) // Professional blue
         
-        // Background colors - adaptive
+        // Background colors
         static let background = Color(UIColor.systemBackground)
         static let secondaryBackground = Color(UIColor.secondarySystemBackground)
         static let tertiaryBackground = Color(UIColor.tertiarySystemBackground)
         
-        // Text colors - adaptive for dark mode
-        static let primaryText = Color(UIColor.label) // Adapts to dark mode
-        static let secondaryText = Color(UIColor.secondaryLabel) // Adapts to dark mode
-        static let tertiaryText = Color(UIColor.tertiaryLabel) // Adapts to dark mode
+        // Text colors
+        static let primaryText = Color(UIColor.label)
+        static let secondaryText = Color(UIColor.secondaryLabel)
+        static let tertiaryText = Color(UIColor.tertiaryLabel)
         
         // Functional colors
-        static let success = Color.green
+        static let success = Color(red: 0.18, green: 0.62, blue: 0.52) // Muted teal
         static let warning = Color.orange
-        static let error = Color.red
-        static let urgent = Color.red
+        static let error = Color(red: 0.86, green: 0.24, blue: 0.24) // Muted red
+        static let urgent = Color(red: 0.86, green: 0.24, blue: 0.24)
         
-        // Card and surface colors - adaptive
-        static let cardBackground = Color(UIColor.secondarySystemBackground) // Better contrast in dark mode
+        // Card and surface colors
+        static let cardBackground = Color(UIColor.secondarySystemBackground)
         static let overlayBackground = Color(UIColor.systemBackground).opacity(0.95)
         
-        // Border and separator - adaptive
+        // Border and separator
         static let border = Color(UIColor.separator)
         static let divider = Color(UIColor.separator)
         
-        // Map overlay colors - work in both modes
+        // Map overlay colors
         static let mapOverlayBackground = Color(UIColor.systemBackground).opacity(0.95)
         static let chipBackground = Color(UIColor.tertiarySystemBackground)
     }

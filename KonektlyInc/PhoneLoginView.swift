@@ -59,19 +59,14 @@ struct PhoneLoginView: View {
     // MARK: - Subviews
 
     private var headerSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            Image(systemName: "phone.fill")
-                .font(.system(size: 60))
-                .foregroundColor(Theme.Colors.accent)
-
-            Text("Enter Your Phone")
+        VStack(spacing: Theme.Spacing.sm) {
+            Text("Sign In")
                 .font(Theme.Typography.largeTitle)
                 .foregroundColor(Theme.Colors.primaryText)
 
-            Text("We'll send you a one-time verification code")
-                .font(Theme.Typography.body)
+            Text("Enter your phone number to get started")
+                .font(Theme.Typography.subheadline)
                 .foregroundColor(Theme.Colors.secondaryText)
-                .multilineTextAlignment(.center)
         }
     }
 

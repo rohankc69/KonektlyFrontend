@@ -59,10 +59,13 @@ nonisolated struct AnyCodable: Codable, @unchecked Sendable {
 nonisolated enum APIErrorCode: String, Sendable {
     // Auth
     case invalidPhone = "INVALID_PHONE"
+    case invalidOTP = "INVALID_OTP"
     case otpExpired = "OTP_EXPIRED"
     case otpInvalid = "OTP_INVALID"
     case otpRateLimit = "OTP_RATE_LIMIT"
+    case otpServiceUnavailable = "OTP_SERVICE_UNAVAILABLE"
     case firebaseError = "FIREBASE_ERROR"
+    case authenticationError = "AUTHENTICATION_ERROR"
     case tokenExpired = "TOKEN_EXPIRED"
     case unauthorized = "UNAUTHORIZED"
     case emailAlreadyVerified = "EMAIL_ALREADY_VERIFIED"
@@ -71,19 +74,24 @@ nonisolated enum APIErrorCode: String, Sendable {
     // Profile
     case profileAlreadyExists = "PROFILE_ALREADY_EXISTS"
     case profileNotFound = "PROFILE_NOT_FOUND"
+    case conflict = "CONFLICT"
     case validationError = "VALIDATION_ERROR"
     // Generic
     case rateLimited = "RATE_LIMITED"
+    case internalServerError = "INTERNAL_SERVER_ERROR"
     case serverError = "SERVER_ERROR"
     case unknown = "UNKNOWN"
 
     var userFacingMessage: String {
         switch self {
         case .invalidPhone: return "Please enter a valid phone number."
+        case .invalidOTP: return "Invalid verification code. Please try again."
         case .otpExpired: return "Your verification code has expired. Please request a new one."
         case .otpInvalid: return "Incorrect code. Please try again."
         case .otpRateLimit: return "Too many attempts. Please wait before requesting a new code."
+        case .otpServiceUnavailable: return "SMS service is temporarily unavailable. Please try again later."
         case .firebaseError: return "Phone verification failed. Please try again."
+        case .authenticationError: return "Authentication failed. Please try again."
         case .tokenExpired: return "Your session has expired. Please sign in again."
         case .unauthorized: return "You are not authorised to perform this action."
         case .emailAlreadyVerified: return "This email address is already verified."
@@ -91,8 +99,10 @@ nonisolated enum APIErrorCode: String, Sendable {
         case .emailTokenExpired: return "The verification link has expired. Please request a new one."
         case .profileAlreadyExists: return "A profile already exists for this account."
         case .profileNotFound: return "Profile not found."
+        case .conflict: return "This profile has already been verified and cannot be changed."
         case .validationError: return "Please check the information you entered."
         case .rateLimited: return "You're doing that too fast. Please wait a moment."
+        case .internalServerError: return "Something went wrong on our end. Please try again."
         case .serverError: return "Something went wrong on our end. Please try again."
         case .unknown: return "An unexpected error occurred. Please try again."
         }
@@ -106,6 +116,8 @@ nonisolated enum AppError: LocalizedError, Sendable {
     case network(underlying: any Error)
     case decoding(underlying: any Error)
     case rateLimited(retryAfter: TimeInterval?)
+    case conflict(message: String)
+    case serviceUnavailable(message: String)
     case unauthorized
     case unknown
 
@@ -122,6 +134,10 @@ nonisolated enum AppError: LocalizedError, Sendable {
                 return "Too many requests. Please wait \(Int(secs)) seconds."
             }
             return "Too many requests. Please wait a moment."
+        case .conflict(let msg):
+            return msg.isEmpty ? "This profile is already verified and cannot be changed." : msg
+        case .serviceUnavailable(let msg):
+            return msg.isEmpty ? "Service is temporarily unavailable. Please try again later." : msg
         case .unauthorized:
             return "Your session has expired. Please sign in again."
         case .unknown:
@@ -140,15 +156,17 @@ nonisolated struct SendOTPResponse: Decodable, Sendable {
     let message: String?
 }
 
-// Primary: Firebase id_token flow
+// Firebase id_token flow - includes profile_type
 nonisolated struct VerifyOTPFirebaseRequest: Encodable, Sendable {
     let phone: String
+    let profile_type: String
     let id_token: String
 }
 
-// Dev fallback: plain code
+// Dev fallback: plain code - includes profile_type
 nonisolated struct VerifyOTPDevRequest: Encodable, Sendable {
     let phone: String
+    let profile_type: String
     let code: String
 }
 
@@ -175,23 +193,33 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
     let username: String?
     let phone: String?
     let email: String?
+    let firstName: String?
+    let lastName: String?
     let isEmailVerified: Bool
     let isActiveProfile: Bool
+    let termsAccepted: Bool?
     let workerProfile: AnyCodable?
     let businessProfile: AnyCodable?
     let accessTier: String?
     let phoneVerifiedAt: String?
     let emailVerifiedAt: String?
 
-    // Convenience computed properties for the rest of the app
     var emailVerified: Bool { isEmailVerified }
     var hasWorkerProfile: Bool { workerProfile != nil }
     var hasBusinessProfile: Bool { businessProfile != nil }
+    var hasName: Bool {
+        guard let first = firstName, let last = lastName else { return false }
+        return first.count >= 2 && last.count >= 2
+    }
+    var hasAcceptedTerms: Bool { termsAccepted == true }
 
     enum CodingKeys: String, CodingKey {
         case id, username, phone, email
+        case firstName = "first_name"
+        case lastName = "last_name"
         case isEmailVerified = "is_email_verified"
         case isActiveProfile = "is_active_profile"
+        case termsAccepted = "terms_accepted"
         case workerProfile = "worker_profile"
         case businessProfile = "business_profile"
         case accessTier = "access_tier"
@@ -203,8 +231,11 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
         lhs.id == rhs.id
             && lhs.phone == rhs.phone
             && lhs.email == rhs.email
+            && lhs.firstName == rhs.firstName
+            && lhs.lastName == rhs.lastName
             && lhs.isEmailVerified == rhs.isEmailVerified
             && lhs.isActiveProfile == rhs.isActiveProfile
+            && lhs.termsAccepted == rhs.termsAccepted
             && lhs.accessTier == rhs.accessTier
     }
 }
@@ -223,59 +254,101 @@ nonisolated struct EmailVerificationResponse: Decodable, Sendable {
     let message: String?
 }
 
-// MARK: - Profiles
+// MARK: - Name Update (Step 4 of onboarding)
+// PATCH /auth/profile/name/
 
-nonisolated struct WorkerProfileCreateRequest: Encodable, Sendable {
+nonisolated struct NameUpdateRequest: Encodable, Sendable {
     let firstName: String
     let lastName: String
-    let bio: String
-    let skills: [String]
-    let hourlyRate: Double
-    let availableFrom: String?  // ISO-8601 date string
 
     enum CodingKeys: String, CodingKey {
-        case bio, skills
         case firstName = "first_name"
         case lastName = "last_name"
-        case hourlyRate = "hourly_rate"
-        case availableFrom = "available_from"
     }
 }
 
-nonisolated struct BusinessProfileCreateRequest: Encodable, Sendable {
-    let businessName: String
-    let industry: String
-    let description: String
-    let website: String?
+nonisolated struct NameUpdateResponse: Decodable, Sendable {
+    let message: String?
+}
+
+// MARK: - Terms Accept (Step 5 of onboarding)
+// POST /auth/terms/accept/
+
+nonisolated struct TermsAcceptRequest: Encodable, Sendable {
+    let accepted: Bool
+    let termsVersion: String
 
     enum CodingKeys: String, CodingKey {
-        case industry, description, website
+        case accepted
+        case termsVersion = "terms_version"
+    }
+}
+
+nonisolated struct TermsAcceptResponse: Decodable, Sendable {
+    let message: String?
+}
+
+// MARK: - Profile Create Requests (match exact backend contract)
+
+// Worker: POST /profiles/worker/create/
+// Only gov ID fields - name is set via PATCH /auth/profile/name/
+nonisolated struct WorkerProfileCreateRequest: Encodable, Sendable {
+    let govIdNumber: String
+    let govIdType: String
+
+    enum CodingKeys: String, CodingKey {
+        case govIdNumber = "gov_id_number"
+        case govIdType = "gov_id_type"
+    }
+}
+
+// Business: POST /profiles/business/create/
+nonisolated struct BusinessProfileCreateRequest: Encodable, Sendable {
+    let businessId: String
+    let businessName: String
+    let managerGovIdNumber: String
+
+    enum CodingKeys: String, CodingKey {
+        case businessId = "business_id"
         case businessName = "business_name"
+        case managerGovIdNumber = "manager_gov_id_number"
     }
 }
 
 nonisolated struct ProfileCreateResponse: Decodable, Sendable {
-    let id: String?
     let message: String?
 }
 
-// MARK: - Verification Status
+// MARK: - Profile Status
 
 nonisolated struct ProfileStatus: Decodable, Sendable {
-    let workerStatus: AnyCodable?
-    let businessStatus: AnyCodable?
+    let workerStatus: String?
+    let businessStatus: String?
     let isActiveProfile: Bool
     let accessTier: String
+    let verificationStatus: String?
 
-    // Convenience for the rest of the app
     var hasWorkerProfile: Bool { workerStatus != nil }
     var hasBusinessProfile: Bool { businessStatus != nil }
+
+    // Profile is pending verification
+    var isWorkerPending: Bool { workerStatus?.lowercased() == "pending" }
+    var isBusinessPending: Bool { businessStatus?.lowercased() == "pending" }
+
+    // Profile is approved
+    var isWorkerApproved: Bool { workerStatus?.lowercased() == "approved" }
+    var isBusinessApproved: Bool { businessStatus?.lowercased() == "approved" }
+
+    // Profile was rejected - can resubmit
+    var isWorkerRejected: Bool { workerStatus?.lowercased() == "rejected" }
+    var isBusinessRejected: Bool { businessStatus?.lowercased() == "rejected" }
 
     enum CodingKeys: String, CodingKey {
         case workerStatus = "worker_status"
         case businessStatus = "business_status"
         case isActiveProfile = "is_active_profile"
         case accessTier = "access_tier"
+        case verificationStatus = "verification_status"
     }
 }
 

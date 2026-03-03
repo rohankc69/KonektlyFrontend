@@ -16,6 +16,20 @@ enum AuthState {
     case authenticated(user: AuthUser)
 }
 
+// MARK: - Onboarding Step
+
+enum OnboardingStep: Int, Comparable {
+    case email = 0           // needs to verify email
+    case name = 1            // needs to set first/last name
+    case terms = 2           // needs to accept terms
+    case profileDetails = 3  // needs to submit gov ID / business details
+    case complete = 4        // all done, dashboard access
+
+    static func < (lhs: OnboardingStep, rhs: OnboardingStep) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 // MARK: - Auth Store
 
 @MainActor
@@ -30,8 +44,11 @@ final class AuthStore: ObservableObject {
     @Published var isLoading = false
     @Published var error: AppError? = nil
 
-    /// Firebase verification ID returned after OTP is sent
+    // Firebase verification ID returned after OTP is sent
     private var firebaseVerificationID: String?
+
+    // Polling timer for verification status
+    private var pollingTask: Task<Void, Never>?
 
     var currentUser: AuthUser? {
         if case .authenticated(let user) = authState { return user }
@@ -40,41 +57,67 @@ final class AuthStore: ObservableObject {
 
     var isAuthenticated: Bool { currentUser != nil }
 
-    var needsEmailVerification: Bool {
-        guard let user = currentUser else { return false }
-        return !user.emailVerified
+    var selectedRole: UserRole {
+        let raw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
+        return UserRole(rawValue: raw) ?? .worker
     }
 
-    var needsProfile: Bool {
-        guard let user = currentUser else { return false }
-        let roleRaw = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.worker.rawValue
-        let role = UserRole(rawValue: roleRaw) ?? .worker
-        switch role {
-        case .worker: return !(profileStatus?.hasWorkerProfile ?? user.hasWorkerProfile)
-        case .business: return !(profileStatus?.hasBusinessProfile ?? user.hasBusinessProfile)
+    // MARK: - Onboarding Step (source of truth from backend state)
+
+    var onboardingStep: OnboardingStep {
+        guard let user = currentUser else { return .email }
+
+        // Step 3: Email
+        if !user.emailVerified { return .email }
+
+        // Step 4: Name
+        if !user.hasName { return .name }
+
+        // Step 5: Terms
+        if !user.hasAcceptedTerms { return .terms }
+
+        // Step 6: Profile details
+        let role = selectedRole
+        let hasProfile: Bool
+        if let status = profileStatus {
+            hasProfile = role == .worker ? status.hasWorkerProfile : status.hasBusinessProfile
+        } else {
+            hasProfile = role == .worker ? user.hasWorkerProfile : user.hasBusinessProfile
         }
+
+        if let status = profileStatus {
+            let isRejected = role == .worker ? status.isWorkerRejected : status.isBusinessRejected
+            if isRejected { return .profileDetails }
+        }
+
+        if !hasProfile { return .profileDetails }
+
+        return .complete
     }
 
-    // MARK: - Bootstrap (called on app launch if tokens exist)
+    var needsOnboarding: Bool { onboardingStep != .complete }
+    var needsProfileDetails: Bool { onboardingStep == .profileDetails }
+
+    // MARK: - Bootstrap
 
     func bootstrapIfNeeded() async {
         guard TokenStore.shared.accessToken != nil else { return }
         await loadCurrentUser()
     }
 
-    // MARK: - Send OTP (Firebase sends the SMS)
+    // MARK: - Send OTP
 
     func sendOTP(phone: String) async throws {
         isLoading = true
         defer { isLoading = false }
         clearError()
 
-        print("[AUTH] sendOTP called, phone length=\(phone.count), starts with +=\(phone.hasPrefix("+"))")
+        print("[AUTH] sendOTP called, phone length=\(phone.count)")
 
         do {
             let verificationID = try await PhoneAuthProvider.provider().verifyPhoneNumber(phone, uiDelegate: nil)
             self.firebaseVerificationID = verificationID
-            print("[AUTH] OTP sent successfully, verificationID present=\(verificationID.isEmpty == false)")
+            print("[AUTH] OTP sent successfully")
         } catch {
             let nsError = error as NSError
             print("[AUTH] sendOTP failed: domain=\(nsError.domain) code=\(nsError.code)")
@@ -86,7 +129,7 @@ final class AuthStore: ObservableObject {
         }
     }
 
-    // MARK: - Verify OTP (Firebase -> get ID token -> send to backend)
+    // MARK: - Verify OTP (Firebase flow)
 
     func verifyOTPWithFirebase(phone: String, otpCode: String) async throws {
         guard let verificationID = firebaseVerificationID else {
@@ -98,38 +141,34 @@ final class AuthStore: ObservableObject {
         defer { isLoading = false }
         clearError()
 
-        print("[AUTH] verifyOTP called, verificationID present=true, code length=\(otpCode.count)")
+        print("[AUTH] verifyOTP called, code length=\(otpCode.count)")
 
-        // Step 1: Create Firebase credential from the OTP code
         let credential = PhoneAuthProvider.provider().credential(
             withVerificationID: verificationID,
             verificationCode: otpCode
         )
 
-        // Step 2: Sign in with Firebase to validate the code
         let authResult: AuthDataResult
         do {
             authResult = try await Auth.auth().signIn(with: credential)
-            print("[AUTH] Firebase sign-in succeeded, uid present=\(authResult.user.uid.isEmpty == false)")
+            print("[AUTH] Firebase sign-in succeeded")
         } catch {
             print("[AUTH] Firebase verify failed: \(error.localizedDescription)")
             throw AppError.apiError(code: .otpInvalid, message: "Invalid verification code. Please try again.")
         }
 
-        // Step 3: Get the Firebase ID token (force refresh to avoid stale cache)
         guard let idToken = try? await authResult.user.getIDTokenResult(forcingRefresh: true).token else {
             print("[AUTH] Failed to get ID token from Firebase user")
             throw AppError.apiError(code: .unknown, message: "Failed to get Firebase ID token.")
         }
         print("[AUTH] Got Firebase ID token, length=\(idToken.count)")
 
-        // Step 4: Use Firebase's phone number (guaranteed E.164 format)
         let verifiedPhone = authResult.user.phoneNumber ?? phone
-        print("[AUTH] Sending to backend: phone=\(verifiedPhone), id_token present=true")
+        let profileType = selectedRole.rawValue
+        print("[AUTH] Sending to backend: phone=\(verifiedPhone), profile_type=\(profileType)")
 
-        // Step 5: Send the ID token to backend for JWT exchange
         let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
-            .verifyOTPFirebase(phone: verifiedPhone, idToken: idToken)
+            .verifyOTPFirebase(phone: verifiedPhone, profileType: profileType, idToken: idToken)
         )
         print("[AUTH] Backend JWT exchange succeeded")
         storeTokens(response.tokens)
@@ -137,7 +176,7 @@ final class AuthStore: ObservableObject {
         await loadProfileStatus()
     }
 
-    // MARK: - Verify OTP (Dev fallback - only available in DEBUG builds)
+    // MARK: - Verify OTP (Dev fallback)
 
     func verifyOTPDev(phone: String, code: String) async throws {
         guard Config.isDevOTPFallbackEnabled else {
@@ -147,8 +186,9 @@ final class AuthStore: ObservableObject {
         defer { isLoading = false }
         clearError()
 
+        let profileType = selectedRole.rawValue
         let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
-            .verifyOTPDev(phone: phone, code: code)
+            .verifyOTPDev(phone: phone, profileType: profileType, code: code)
         )
         storeTokens(response.tokens)
         authState = .authenticated(user: response.user)
@@ -170,7 +210,7 @@ final class AuthStore: ObservableObject {
         }
     }
 
-    // MARK: - Email Verification
+    // MARK: - Email Verification (Step 3)
 
     func sendEmailVerification(email: String) async throws {
         isLoading = true
@@ -190,11 +230,35 @@ final class AuthStore: ObservableObject {
         let _: EmailVerificationResponse = try await APIClient.shared.request(
             .verifyEmailToken(token)
         )
-        // Refresh user to reflect updated email_verified flag
         await loadCurrentUser()
     }
 
-    // MARK: - Profile Creation
+    // MARK: - Name Update (Step 4)
+
+    func updateName(firstName: String, lastName: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        clearError()
+
+        let req = NameUpdateRequest(firstName: firstName, lastName: lastName)
+        let _: NameUpdateResponse = try await APIClient.shared.request(.updateName(req))
+        await loadCurrentUser()
+    }
+
+    // MARK: - Terms Accept (Step 5)
+
+    func acceptTerms() async throws {
+        isLoading = true
+        defer { isLoading = false }
+        clearError()
+
+        let today = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        let req = TermsAcceptRequest(accepted: true, termsVersion: today)
+        let _: TermsAcceptResponse = try await APIClient.shared.request(.acceptTerms(req))
+        await loadCurrentUser()
+    }
+
+    // MARK: - Profile Creation (Step 6)
 
     func createWorkerProfile(_ request: WorkerProfileCreateRequest) async throws {
         isLoading = true
@@ -218,22 +282,47 @@ final class AuthStore: ObservableObject {
         await loadCurrentUser()
     }
 
-    // MARK: - Profile Status
+    // MARK: - Profile Status + Access Tier
 
     func loadProfileStatus() async {
         do {
             let status: ProfileStatus = try await APIClient.shared.request(.profileStatus)
             profileStatus = status
+        } catch {
+            print("[AUTH] loadProfileStatus failed: \(error)")
+        }
+        do {
             let tier: AccessTier = try await APIClient.shared.request(.accessTier)
             accessTier = tier
         } catch {
-            // Non-fatal; keep existing status
+            print("[AUTH] loadAccessTier failed: \(error)")
         }
+    }
+
+    // MARK: - Verification Polling
+
+    func startVerificationPolling() {
+        stopVerificationPolling()
+        pollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                await loadProfileStatus()
+                await loadCurrentUser()
+                if onboardingStep == .complete { return }
+            }
+        }
+    }
+
+    func stopVerificationPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     // MARK: - Sign Out
 
     func signOut() {
+        stopVerificationPolling()
         TokenStore.shared.clearAll()
         authState = .unauthenticated
         profileStatus = nil
@@ -249,7 +338,5 @@ final class AuthStore: ObservableObject {
     }
 
     func clearError() { error = nil }
-
-    // Allow views to surface arbitrary errors into the store
     func setError(_ err: AppError) { error = err }
 }

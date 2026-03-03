@@ -23,24 +23,15 @@ struct RolePickerView: View {
             VStack(spacing: Theme.Spacing.xxxl) {
                 // Header
                 VStack(spacing: Theme.Spacing.md) {
-                    Image(systemName: "person.2.circle.fill")
-                        .font(.system(size: 80))
+                    Text("Konektly")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
                         .foregroundColor(Theme.Colors.accent)
-                        .scaleEffect(isAnimating ? 1.0 : 0.8)
                         .opacity(isAnimating ? 1.0 : 0.0)
                     
-                    Text("Welcome to Konektly")
-                        .font(Theme.Typography.largeTitle)
+                    Text("How will you use Konektly?")
+                        .font(Theme.Typography.title2)
                         .foregroundColor(Theme.Colors.primaryText)
                         .opacity(isAnimating ? 1.0 : 0.0)
-                        .offset(y: isAnimating ? 0 : 20)
-                    
-                    Text("Connect with opportunities\nor find the perfect hire")
-                        .font(Theme.Typography.body)
-                        .foregroundColor(Theme.Colors.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .opacity(isAnimating ? 1.0 : 0.0)
-                        .offset(y: isAnimating ? 0 : 20)
                 }
                 .padding(.top, Theme.Spacing.huge)
                 
