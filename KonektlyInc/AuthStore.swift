@@ -20,10 +20,10 @@ enum AuthState {
 
 enum OnboardingStep: Int, Comparable {
     case name = 0            // needs to set first/last name
-    case terms = 1           // needs to accept terms
-    case profileDetails = 2  // needs to submit gov ID / business details
-    case complete = 3        // all done, dashboard access
-    
+    case dob = 1             // needs to set date of birth
+    case terms = 2           // needs to accept terms
+    case profileDetails = 3  // needs to submit gov ID / business details
+    case complete = 4        // all done, dashboard access
 
     static func < (lhs: OnboardingStep, rhs: OnboardingStep) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -37,17 +37,13 @@ final class AuthStore: ObservableObject {
     static let shared = AuthStore()
     private init() {}
 
-    // MARK: Published State
     @Published var authState: AuthState = .unauthenticated
     @Published var profileStatus: ProfileStatus? = nil
     @Published var accessTier: AccessTier? = nil
     @Published var isLoading = false
     @Published var error: AppError? = nil
 
-    // Firebase verification ID returned after OTP is sent
     private var firebaseVerificationID: String?
-
-    // Polling timer for verification status
     private var pollingTask: Task<Void, Never>?
 
     var currentUser: AuthUser? {
@@ -67,29 +63,30 @@ final class AuthStore: ObservableObject {
     var onboardingStep: OnboardingStep {
         guard let user = currentUser else { return .name }
 
-
-        // Step 4: Name
         if !user.hasName { return .name }
-
-        // Step 5: Terms
+        if !user.hasDOB { return .dob }
         if !user.hasAcceptedTerms { return .terms }
 
-        // Step 6: Profile details
         let role = selectedRole
         let hasProfile: Bool
         if let status = profileStatus {
-            hasProfile = role == .worker ? (user.hasCompleteWorkerProfile) : (user.hasCompleteBusinessProfile)
+            hasProfile = role == .worker
+                ? user.hasCompleteWorkerProfile
+                : user.hasCompleteBusinessProfile
         } else {
-            hasProfile = role == .worker ? user.hasCompleteWorkerProfile : user.hasCompleteBusinessProfile
+            hasProfile = role == .worker
+                ? user.hasCompleteWorkerProfile
+                : user.hasCompleteBusinessProfile
         }
 
         if let status = profileStatus {
-            let isRejected = role == .worker ? status.isWorkerRejected : status.isBusinessRejected
+            let isRejected = role == .worker
+                ? status.isWorkerRejected
+                : status.isBusinessRejected
             if isRejected { return .profileDetails }
         }
 
         if !hasProfile { return .profileDetails }
-
         return .complete
     }
 
@@ -110,19 +107,14 @@ final class AuthStore: ObservableObject {
         defer { isLoading = false }
         clearError()
 
-        print("[AUTH] sendOTP called, phone length=\(phone.count)")
-
         do {
-            let verificationID = try await PhoneAuthProvider.provider().verifyPhoneNumber(phone, uiDelegate: nil)
+            let verificationID = try await PhoneAuthProvider.provider()
+                .verifyPhoneNumber(phone, uiDelegate: nil)
             self.firebaseVerificationID = verificationID
             print("[AUTH] OTP sent successfully")
         } catch {
             let nsError = error as NSError
             print("[AUTH] sendOTP failed: domain=\(nsError.domain) code=\(nsError.code)")
-            if let underlyingInfo = nsError.userInfo["FIRAuthErrorUserInfoDeserializedResponseKey"] as? [String: Any],
-               let message = underlyingInfo["message"] as? String {
-                print("[AUTH] sendOTP server reason: \(message)")
-            }
             throw AppError.apiError(code: .unknown, message: error.localizedDescription)
         }
     }
@@ -131,15 +123,12 @@ final class AuthStore: ObservableObject {
 
     func verifyOTPWithFirebase(phone: String, otpCode: String) async throws {
         guard let verificationID = firebaseVerificationID else {
-            print("[AUTH] verify failed: no verificationID stored")
             throw AppError.apiError(code: .unknown, message: "No verification ID. Please resend the code.")
         }
 
         isLoading = true
         defer { isLoading = false }
         clearError()
-
-        print("[AUTH] verifyOTP called, code length=\(otpCode.count)")
 
         let credential = PhoneAuthProvider.provider().credential(
             withVerificationID: verificationID,
@@ -151,24 +140,20 @@ final class AuthStore: ObservableObject {
             authResult = try await Auth.auth().signIn(with: credential)
             print("[AUTH] Firebase sign-in succeeded")
         } catch {
-            print("[AUTH] Firebase verify failed: \(error.localizedDescription)")
             throw AppError.apiError(code: .otpInvalid, message: "Invalid verification code. Please try again.")
         }
 
-        guard let idToken = try? await authResult.user.getIDTokenResult(forcingRefresh: true).token else {
-            print("[AUTH] Failed to get ID token from Firebase user")
+        guard let idToken = try? await authResult.user
+            .getIDTokenResult(forcingRefresh: true).token else {
             throw AppError.apiError(code: .unknown, message: "Failed to get Firebase ID token.")
         }
-        print("[AUTH] Got Firebase ID token, length=\(idToken.count)")
 
         let verifiedPhone = authResult.user.phoneNumber ?? phone
         let profileType = selectedRole.rawValue
-        print("[AUTH] Sending to backend: phone=\(verifiedPhone), profile_type=\(profileType)")
 
         let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
             .verifyOTPFirebase(phone: verifiedPhone, profileType: profileType, idToken: idToken)
         )
-        print("[AUTH] Backend JWT exchange succeeded")
         storeTokens(response.tokens)
         authState = .authenticated(user: response.user)
         await loadProfileStatus()
@@ -208,13 +193,12 @@ final class AuthStore: ObservableObject {
         }
     }
 
-    // MARK: - Email Verification (Step 3)
+    // MARK: - Email Verification
 
     func sendEmailVerification(email: String) async throws {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
         let _: EmailVerificationResponse = try await APIClient.shared.request(
             .sendEmailVerification(email: email)
         )
@@ -224,7 +208,6 @@ final class AuthStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
         let _: EmailVerificationResponse = try await APIClient.shared.request(
             .verifyEmailToken(token)
         )
@@ -237,32 +220,42 @@ final class AuthStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
         let req = NameUpdateRequest(firstName: firstName, lastName: lastName)
         let _: NameUpdateResponse = try await APIClient.shared.request(.updateName(req))
         await loadCurrentUser()
     }
 
-    // MARK: - Terms Accept (Step 5)
+    // MARK: - DOB Update (Step 5)
+
+    func updateDOB(dateOfBirth: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        clearError()
+        let req = DOBUpdateRequest(dateOfBirth: dateOfBirth)
+        let _: DOBUpdateResponse = try await APIClient.shared.request(.updateDOB(req))
+        await loadCurrentUser()
+    }
+
+    // MARK: - Terms Accept (Step 6)
 
     func acceptTerms() async throws {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
-        let today = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        let today = ISO8601DateFormatter.string(
+            from: Date(), timeZone: .current, formatOptions: [.withFullDate]
+        )
         let req = TermsAcceptRequest(accepted: true, termsVersion: today)
         let _: TermsAcceptResponse = try await APIClient.shared.request(.acceptTerms(req))
         await loadCurrentUser()
     }
 
-    // MARK: - Profile Creation (Step 6)
+    // MARK: - Profile Creation (Step 7)
 
     func createWorkerProfile(_ request: WorkerProfileCreateRequest) async throws {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
         let _: ProfileCreateResponse = try await APIClient.shared.request(
             .createWorkerProfile(request)
         )
@@ -273,7 +266,6 @@ final class AuthStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         clearError()
-
         let _: ProfileCreateResponse = try await APIClient.shared.request(
             .createBusinessProfile(request)
         )

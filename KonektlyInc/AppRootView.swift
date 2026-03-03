@@ -16,13 +16,13 @@ struct AppRootView: View {
     var body: some View {
         Group {
             if !hasPickedRole {
-                // Step 1: Role picker - must select worker/business before login
+                // 1. Role picker - must select worker/business before login
                 RolePickerView(hasCompletedOnboarding: $hasPickedRole)
             } else if !authStore.isAuthenticated {
-                // Step 2: Phone login + OTP
+                // 2. Phone login / OTP (role already selected, sent with verify-otp)
                 PhoneLoginView()
             } else {
-                // Steps 3-7: Authenticated - route based on backend state
+                // 3. Authenticated - route based on onboarding step
                 authenticatedFlow
             }
         }
@@ -41,25 +41,14 @@ struct AppRootView: View {
     private var authenticatedFlow: some View {
         switch authStore.onboardingStep {
         case .name:
-            // Step 4: Name entry
-            NavigationStack {
-                NameEntryView()
-            }
-
+            NavigationStack { NameEntryView() }
+        case .dob:
+            NavigationStack { DOBEntryView() }
         case .terms:
-            // Step 5: Terms acceptance
-            NavigationStack {
-                TermsAcceptView()
-            }
-
+            NavigationStack { TermsAcceptView() }
         case .profileDetails:
-            // Step 6: Gov ID / Business details
-            NavigationStack {
-                profileCreationView
-            }
-
+            NavigationStack { profileCreationView }
         case .complete:
-            // Step 7: Main dashboard
             mainTabView
         }
     }

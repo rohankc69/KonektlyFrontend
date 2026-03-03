@@ -377,7 +377,13 @@ extension Endpoint {
                  body: AnyEncodable(req))
     }
 
-    // Terms accept (step 5)
+    // DOB update (step 5)
+    static func updateDOB(_ req: DOBUpdateRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/profile/dob/", method: .patch,
+                 body: AnyEncodable(req))
+    }
+
+    // Terms accept (step 6)
     static func acceptTerms(_ req: TermsAcceptRequest) -> Endpoint {
         Endpoint(path: "/api/v1/auth/terms/accept/", method: .post,
                  body: AnyEncodable(req))

@@ -10,250 +10,199 @@ import SwiftUI
 struct VerificationStatusView: View {
     @EnvironmentObject private var authStore: AuthStore
     @State private var isRefreshing = false
+    @State private var showEmailVerification = false
 
     private var user: AuthUser? { authStore.currentUser }
     private var status: ProfileStatus? { authStore.profileStatus }
-    private var tier: AccessTier? { authStore.accessTier }
+
+    private var displayName: String {
+        if let first = user?.firstName, let last = user?.lastName,
+           !first.isEmpty, !last.isEmpty {
+            return "\(first) \(last)"
+        }
+        return user?.phone ?? "Account"
+    }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.Colors.background.ignoresSafeArea()
-
-                if authStore.isLoading && status == nil {
-                    ProgressView("Loading status...")
-                        .progressViewStyle(.circular)
-                } else {
-                    ScrollView {
-                        VStack(spacing: Theme.Spacing.xl) {
-                            accountHeader
-                            accessTierCard
-                            profileStatusCard
-                            verificationChecklist
-                            signOutButton
-                        }
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Header: Name + Avatar
+                    headerSection
                         .padding(.horizontal, Theme.Spacing.xl)
-                        .padding(.vertical, Theme.Spacing.xl)
-                    }
-                    .refreshable { await refresh() }
+                        .padding(.top, Theme.Spacing.xl)
+                        .padding(.bottom, Theme.Spacing.xxl)
+
+                    // Quick action cards
+                    quickActions
+                        .padding(.horizontal, Theme.Spacing.xl)
+                        .padding(.bottom, Theme.Spacing.xxl)
+
+                    // Menu list
+                    menuList
+                        .padding(.bottom, Theme.Spacing.xxl)
                 }
             }
-            .navigationTitle("Account")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { Task { await refresh() } }) {
-                        if isRefreshing {
-                            ProgressView().progressViewStyle(.circular)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
+            .background(Theme.Colors.background)
+            .refreshable { await refresh() }
+            .sheet(isPresented: $showEmailVerification) {
+                NavigationStack {
+                    EmailVerificationView()
+                        .environmentObject(authStore)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button("Close") { showEmailVerification = false }
+                            }
                         }
-                    }
-                    .disabled(isRefreshing)
                 }
             }
         }
         .task { await refresh() }
     }
 
-    // MARK: - Subviews
+    // MARK: - Header
 
-    private var accountHeader: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            if let phone = user?.phone {
-                Text(phone)
-                    .font(Theme.Typography.title3)
+    private var headerSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text(displayName)
+                    .font(.system(size: 32, weight: .bold))
                     .foregroundColor(Theme.Colors.primaryText)
             }
 
-            if let email = user?.email, !email.isEmpty {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text(email)
-                        .font(Theme.Typography.subheadline)
-                        .foregroundColor(Theme.Colors.secondaryText)
-                    if user?.emailVerified == true {
-                        Image(systemName: "checkmark.seal.fill")
-                            .foregroundColor(Theme.Colors.accent)
-                            .font(.system(size: 12))
-                    }
-                }
-            }
+            Spacer()
 
-            let role = authStore.selectedRole
-            Text(role == .worker ? "Worker" : "Business")
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.secondaryText)
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.xs)
-                .background(Theme.Colors.tertiaryBackground)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-        }
-        .padding(Theme.Spacing.lg)
-        .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
-    private var accessTierCard: some View {
-        if let tier {
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                HStack {
-                    Label("Access Tier", systemImage: "bolt.shield.fill")
-                        .font(Theme.Typography.headlineBold)
-                        .foregroundColor(Theme.Colors.primaryText)
-                    Spacer()
-                    Text(tier.accessTier.replacingOccurrences(of: "_", with: " ").uppercased())
-                        .font(Theme.Typography.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, Theme.Spacing.md)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(tierColor(tier.accessTier))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
-                }
+            // Avatar circle
+            ZStack {
+                Circle()
+                    .fill(Color(UIColor.systemGray5))
+                    .frame(width: 60, height: 60)
+                Image(systemName: "person.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(Color(UIColor.systemGray2))
             }
-            .padding(Theme.Spacing.lg)
-            .background(Theme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.large))
-            .shadow(color: Theme.Shadows.small.color, radius: Theme.Shadows.small.radius,
-                    x: Theme.Shadows.small.x, y: Theme.Shadows.small.y)
         }
     }
 
-    @ViewBuilder
-    private var profileStatusCard: some View {
-        if let status {
-            let role = authStore.selectedRole
-            let profileStatus = role == .worker ? status.workerStatus : status.businessStatus
-            let isActive = status.isActiveProfile
+    // MARK: - Quick Actions
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                HStack {
-                    Label("Profile Status", systemImage: "person.crop.circle.badge.checkmark")
-                        .font(Theme.Typography.headlineBold)
-                        .foregroundColor(Theme.Colors.primaryText)
-                    Spacer()
-                    if let profileStatus {
-                        HStack(spacing: Theme.Spacing.xs) {
-                            Circle()
-                                .fill(profileStatusColor(profileStatus))
-                                .frame(width: 8, height: 8)
-                            Text(profileStatus.capitalized)
-                                .font(Theme.Typography.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(profileStatusColor(profileStatus))
-                        }
-                    }
-                }
-
-                if isActive {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(Theme.Colors.success)
-                        Text("Your profile is active. You have full access to the platform.")
-                            .font(Theme.Typography.footnote)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                    }
-                } else if profileStatus?.lowercased() == "pending" {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "clock.fill")
-                            .foregroundColor(.orange)
-                        Text("Your profile is being reviewed. You'll be notified once approved.")
-                            .font(Theme.Typography.footnote)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                    }
-                } else if profileStatus?.lowercased() == "rejected" {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(Theme.Colors.error)
-                        Text("Your profile was rejected. Please update your details and resubmit.")
-                            .font(Theme.Typography.footnote)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                    }
-                }
-            }
-            .padding(Theme.Spacing.lg)
-            .background(Theme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.large))
-            .shadow(color: Theme.Shadows.small.color, radius: Theme.Shadows.small.radius,
-                    x: Theme.Shadows.small.x, y: Theme.Shadows.small.y)
+    private var quickActions: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            QuickActionCard(icon: "briefcase.fill", label: "Shifts") {}
+            QuickActionCard(icon: "wallet.bifold.fill", label: "Wallet") {}
+            QuickActionCard(icon: "doc.text.fill", label: "History") {}
         }
     }
 
-    private var verificationChecklist: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Verification Checklist")
-                .font(Theme.Typography.headlineBold)
-                .foregroundColor(Theme.Colors.primaryText)
+    // MARK: - Menu List
 
-            VStack(spacing: Theme.Spacing.sm) {
-                ChecklistRow(
-                    title: "Phone Verified",
-                    subtitle: "Required to sign in",
-                    isComplete: user?.phone != nil,
-                    isRequired: true
-                )
-
+    private var menuList: some View {
+        VStack(spacing: 0) {
+            // Verification section
+            if let status = status {
                 let role = authStore.selectedRole
-                let hasProfile = role == .worker
-                    ? (status?.hasWorkerProfile ?? user?.hasWorkerProfile ?? false)
-                    : (status?.hasBusinessProfile ?? user?.hasBusinessProfile ?? false)
-
-                ChecklistRow(
-                    title: role == .worker ? "Worker Profile" : "Business Profile",
-                    subtitle: role == .worker ? "Government ID submitted" : "Business details submitted",
-                    isComplete: hasProfile,
-                    isRequired: true
-                )
-
-                ChecklistRow(
-                    title: "Profile Approved",
-                    subtitle: "Verified by platform",
-                    isComplete: status?.isActiveProfile ?? user?.isActiveProfile ?? false,
-                    isRequired: true
-                )
+                let profileStatus = role == .worker ? status.workerStatus : status.businessStatus
+                if let profileStatus, profileStatus.lowercased() != "approved" {
+                    ProfileMenuItem(
+                        icon: "shield.lefthalf.filled",
+                        title: "Verification Status",
+                        subtitle: statusSubtitle(profileStatus),
+                        statusColor: profileStatusColor(profileStatus)
+                    ) {}
+                    menuDivider
+                }
             }
-        }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.large))
-        .shadow(color: Theme.Shadows.small.color, radius: Theme.Shadows.small.radius,
-                x: Theme.Shadows.small.x, y: Theme.Shadows.small.y)
-    }
 
-    private var signOutButton: some View {
-        Button(action: { authStore.signOut() }) {
-            HStack {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                Text("Sign Out")
+            // Email verification
+            ProfileMenuItem(
+                icon: "envelope.fill",
+                title: "Email",
+                subtitle: emailSubtitle
+            ) {
+                if user?.emailVerified != true {
+                    showEmailVerification = true
+                }
             }
-            .font(Theme.Typography.bodySemibold)
-            .foregroundColor(Theme.Colors.error)
-            .frame(maxWidth: .infinity)
-            .frame(height: Theme.Sizes.buttonHeight)
-            .background(Theme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                    .stroke(Theme.Colors.error.opacity(0.3), lineWidth: 1)
-            )
+            menuDivider
+
+            // Profile type
+            ProfileMenuItem(
+                icon: authStore.selectedRole == .worker ? "person.fill" : "building.2.fill",
+                title: authStore.selectedRole == .worker ? "Worker Profile" : "Business Profile",
+                subtitle: "Manage your profile details"
+            ) {}
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "bell.fill",
+                title: "Notifications",
+                subtitle: "Manage your alerts"
+            ) {}
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "questionmark.circle.fill",
+                title: "Help",
+                subtitle: nil
+            ) {}
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "lock.fill",
+                title: "Privacy",
+                subtitle: nil
+            ) {}
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "gearshape.fill",
+                title: "Settings",
+                subtitle: nil
+            ) {}
+            menuDivider
+
+            // Sign out
+            Button(action: { authStore.signOut() }) {
+                HStack(spacing: Theme.Spacing.lg) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 20))
+                        .foregroundColor(Theme.Colors.error)
+                        .frame(width: 28)
+
+                    Text("Sign Out")
+                        .font(Theme.Typography.body)
+                        .foregroundColor(Theme.Colors.error)
+
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.vertical, Theme.Spacing.lg)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
-    // MARK: - Actions
-
-    private func refresh() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        await authStore.loadProfileStatus()
-        await authStore.loadCurrentUser()
+    private var menuDivider: some View {
+        Divider()
+            .padding(.leading, 68)
     }
 
-    private func tierColor(_ tier: String) -> Color {
-        switch tier.lowercased() {
-        case "fully_verified", "premium", "pro": return Color.purple
-        case "identity_verified", "verified": return Color.blue
-        case "phone_verified", "basic": return Theme.Colors.accent
-        default: return Color.gray
+    // MARK: - Helpers
+
+    private var emailSubtitle: String {
+        if let email = user?.email, !email.isEmpty {
+            return user?.emailVerified == true ? email : "\(email) (unverified)"
+        }
+        return "Add email for account recovery"
+    }
+
+    private func statusSubtitle(_ status: String) -> String {
+        switch status.lowercased() {
+        case "pending": return "Under review"
+        case "rejected": return "Needs attention"
+        case "approved": return "Verified"
+        default: return status.capitalized
         }
     }
 
@@ -265,41 +214,86 @@ struct VerificationStatusView: View {
         default: return .gray
         }
     }
+
+    private func refresh() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await authStore.loadProfileStatus()
+        await authStore.loadCurrentUser()
+    }
 }
 
-// MARK: - Supporting Views
+// MARK: - Quick Action Card
 
-struct ChecklistRow: View {
-    let title: String
-    let subtitle: String
-    let isComplete: Bool
-    let isRequired: Bool
+struct QuickActionCard: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 20))
-                .foregroundColor(isComplete ? Theme.Colors.success : Theme.Colors.border)
+        Button(action: action) {
+            VStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(Theme.Colors.primaryText)
+                Text(label)
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.primaryText)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Spacing.lg)
+            .background(Color(UIColor.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
+        }
+        .buttonStyle(.plain)
+    }
+}
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: Theme.Spacing.xs) {
+// MARK: - Profile Menu Item
+
+struct ProfileMenuItem: View {
+    let icon: String
+    let title: String
+    let subtitle: String?
+    var statusColor: Color? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.lg) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .foregroundColor(Theme.Colors.primaryText)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(Theme.Typography.body)
                         .foregroundColor(Theme.Colors.primaryText)
-                    if isRequired && !isComplete {
-                        Text("Required")
-                            .font(Theme.Typography.caption2)
-                            .foregroundColor(Theme.Colors.error)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
                     }
                 }
-                Text(subtitle)
-                    .font(Theme.Typography.caption)
-                    .foregroundColor(Theme.Colors.secondaryText)
-            }
 
-            Spacer()
+                Spacer()
+
+                if let color = statusColor {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(UIColor.systemGray3))
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.vertical, Theme.Spacing.lg)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, Theme.Spacing.sm)
+        .buttonStyle(.plain)
     }
 }
 

@@ -195,6 +195,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
     let email: String?
     let firstName: String?
     let lastName: String?
+    let dateOfBirth: String?
     let isEmailVerified: Bool
     let isActiveProfile: Bool
     let termsAcceptedAt: String?
@@ -236,6 +237,8 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
         return first.count >= 2 && last.count >= 2
     }
 
+    var hasDOB: Bool { dateOfBirth != nil && !(dateOfBirth?.isEmpty ?? true) }
+
     // Backend sends terms_accepted_at as a date string, not a bool
     var hasAcceptedTerms: Bool { termsAcceptedAt != nil }
 
@@ -243,6 +246,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
         case id, username, phone, email
         case firstName = "first_name"
         case lastName = "last_name"
+        case dateOfBirth = "date_of_birth"
         case isEmailVerified = "is_email_verified"
         case isActiveProfile = "is_active_profile"
         case termsAcceptedAt = "terms_accepted_at"
@@ -260,6 +264,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
             && lhs.email == rhs.email
             && lhs.firstName == rhs.firstName
             && lhs.lastName == rhs.lastName
+            && lhs.dateOfBirth == rhs.dateOfBirth
             && lhs.isEmailVerified == rhs.isEmailVerified
             && lhs.isActiveProfile == rhs.isActiveProfile
             && lhs.termsAcceptedAt == rhs.termsAcceptedAt
@@ -298,7 +303,22 @@ nonisolated struct NameUpdateResponse: Decodable, Sendable {
     let message: String?
 }
 
-// MARK: - Terms Accept (Step 5 of onboarding)
+// MARK: - DOB Update (Step 5 of onboarding)
+// PATCH /auth/profile/dob/
+
+nonisolated struct DOBUpdateRequest: Encodable, Sendable {
+    let dateOfBirth: String
+
+    enum CodingKeys: String, CodingKey {
+        case dateOfBirth = "date_of_birth"
+    }
+}
+
+nonisolated struct DOBUpdateResponse: Decodable, Sendable {
+    let message: String?
+}
+
+// MARK: - Terms Accept (Step 6 of onboarding)
 // POST /auth/terms/accept/
 
 nonisolated struct TermsAcceptRequest: Encodable, Sendable {
