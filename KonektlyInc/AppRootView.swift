@@ -40,12 +40,6 @@ struct AppRootView: View {
     @ViewBuilder
     private var authenticatedFlow: some View {
         switch authStore.onboardingStep {
-        case .email:
-            // Step 3: Email verification
-            NavigationStack {
-                EmailVerificationView()
-            }
-
         case .name:
             // Step 4: Name entry
             NavigationStack {

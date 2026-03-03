@@ -22,7 +22,7 @@ struct TermsAcceptView: View {
                 ScrollView {
                     VStack(spacing: Theme.Spacing.xxl) {
                         // Progress indicator
-                        OnboardingProgress(currentStep: 3, totalSteps: 4)
+                        OnboardingProgress(currentStep: 2, totalSteps: 3)
 
                         headerSection
                         termsContent

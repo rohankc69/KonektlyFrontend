@@ -39,7 +39,6 @@ struct EmailVerificationView: View {
             ScrollView {
                 VStack(spacing: Theme.Spacing.xxxl) {
                     // Progress indicator
-                    OnboardingProgress(currentStep: 1, totalSteps: 4)
 
                     headerSection
 

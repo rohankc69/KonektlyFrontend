@@ -19,11 +19,11 @@ enum AuthState {
 // MARK: - Onboarding Step
 
 enum OnboardingStep: Int, Comparable {
-    case email = 0           // needs to verify email
-    case name = 1            // needs to set first/last name
-    case terms = 2           // needs to accept terms
-    case profileDetails = 3  // needs to submit gov ID / business details
-    case complete = 4        // all done, dashboard access
+    case name = 0            // needs to set first/last name
+    case terms = 1           // needs to accept terms
+    case profileDetails = 2  // needs to submit gov ID / business details
+    case complete = 3        // all done, dashboard access
+    
 
     static func < (lhs: OnboardingStep, rhs: OnboardingStep) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -65,10 +65,8 @@ final class AuthStore: ObservableObject {
     // MARK: - Onboarding Step (source of truth from backend state)
 
     var onboardingStep: OnboardingStep {
-        guard let user = currentUser else { return .email }
+        guard let user = currentUser else { return .name }
 
-        // Step 3: Email
-        if !user.emailVerified { return .email }
 
         // Step 4: Name
         if !user.hasName { return .name }

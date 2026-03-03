@@ -300,9 +300,9 @@ final class AuthStoreTests: XCTestCase {
         XCTAssertNil(AuthStore.shared.accessTier)
     }
 
-    func test_onboardingStep_emailWhenUnauthenticated() {
-        // When unauthenticated (no user), onboardingStep defaults to .email
-        XCTAssertEqual(AuthStore.shared.onboardingStep, .email)
+    func test_onboardingStep_nameWhenUnauthenticated() {
+        // When unauthenticated (no user), onboardingStep defaults to .name
+        XCTAssertEqual(AuthStore.shared.onboardingStep, .name)
     }
 
     func test_needsOnboarding_trueWhenUnauthenticated() {

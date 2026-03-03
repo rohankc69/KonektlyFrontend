@@ -40,7 +40,7 @@ struct WorkerProfileCreateView: View {
             ScrollView {
                 VStack(spacing: Theme.Spacing.xxl) {
                     // Progress indicator
-                    OnboardingProgress(currentStep: 4, totalSteps: 4)
+                    OnboardingProgress(currentStep: 3, totalSteps: 3)
 
                     headerSection
                     formSection
@@ -176,7 +176,7 @@ struct BusinessProfileCreateView: View {
             ScrollView {
                 VStack(spacing: Theme.Spacing.xxl) {
                     // Progress indicator
-                    OnboardingProgress(currentStep: 4, totalSteps: 4)
+                    OnboardingProgress(currentStep: 3, totalSteps: 3)
 
                     headerSection
                     formSection

@@ -34,7 +34,7 @@ struct NameEntryView: View {
             ScrollView {
                 VStack(spacing: Theme.Spacing.xxl) {
                     // Progress indicator
-                    OnboardingProgress(currentStep: 2, totalSteps: 4)
+                    OnboardingProgress(currentStep: 1, totalSteps: 3)
 
                     headerSection
                     formSection
