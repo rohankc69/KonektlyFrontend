@@ -15,6 +15,11 @@ struct VerificationStatusView: View {
     @State private var showEmailVerification = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showDeleteConfirm = false
+    @State private var showPhotoOptions = false
+    @State private var showPhotoPicker = false
+    @State private var pendingImage: UIImage?
+    @State private var pendingImageData: Data?
+    @State private var showPhotoPreview = false
 
     private var user: AuthUser? { authStore.currentUser }
     private var status: ProfileStatus? { authStore.profileStatus }
@@ -112,11 +117,11 @@ struct VerificationStatusView: View {
         let photoURL = user?.profilePhoto?.displayURL
         let hasPhoto = user?.profilePhoto != nil
 
-        return PhotosPicker(
-            selection: $selectedPhotoItem,
-            matching: .images,
-            photoLibrary: .shared()
-        ) {
+        return Button {
+            if !isUploading {
+                showPhotoOptions = true
+            }
+        } label: {
             AvatarImageView(
                 previewImage: previewImg,
                 photoURL: photoURL,
@@ -124,21 +129,33 @@ struct VerificationStatusView: View {
             )
         }
         .disabled(isUploading)
+        .confirmationDialog("Profile Photo", isPresented: $showPhotoOptions, titleVisibility: .visible) {
+            Button("Choose Photo") {
+                showPhotoPicker = true
+            }
+            if hasPhoto {
+                Button("Remove Photo", role: .destructive) {
+                    showDeleteConfirm = true
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .images)
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
             Task {
-                await photoUploader.processSelectedPhoto(newItem)
+                // Load the image for preview, don't upload yet
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    pendingImage = image
+                    pendingImageData = data
+                    showPhotoPreview = true
+                }
                 selectedPhotoItem = nil
             }
         }
-        .contextMenu {
-            if hasPhoto {
-                Button(role: .destructive) {
-                    showDeleteConfirm = true
-                } label: {
-                    Label("Remove Photo", systemImage: "trash")
-                }
-            }
+        .sheet(isPresented: $showPhotoPreview) {
+            photoPreviewSheet
         }
         .alert("Remove Photo", isPresented: $showDeleteConfirm) {
             Button("Remove", role: .destructive) {
@@ -149,7 +166,82 @@ struct VerificationStatusView: View {
             Text("Your profile photo will be removed.")
         }
         .accessibilityLabel("Profile photo. Tap to change.")
-        .accessibilityHint("Opens photo picker to upload a new profile photo")
+        .accessibilityHint("Opens options to change or remove your profile photo")
+    }
+
+    // MARK: - Photo Preview Sheet
+
+    private var photoPreviewSheet: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Spacer()
+
+                if let image = pendingImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .clipShape(Circle())
+                        .frame(width: 240, height: 240)
+                        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+                }
+
+                Spacer()
+
+                // Use This Photo button
+                Button {
+                    showPhotoPreview = false
+                    if let data = pendingImageData, let image = pendingImage {
+                        Task {
+                            await photoUploader.uploadFromConfirmedImage(image: image, originalData: data)
+                            pendingImage = nil
+                            pendingImageData = nil
+                        }
+                    }
+                } label: {
+                    Text("Use This Photo")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Theme.Colors.primaryText)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.md)
+
+                // Choose Different button
+                Button {
+                    showPhotoPreview = false
+                    pendingImage = nil
+                    pendingImageData = nil
+                    // Reopen picker after a brief delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showPhotoPicker = true
+                    }
+                } label: {
+                    Text("Choose Different")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundColor(Theme.Colors.primaryText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.lg)
+            }
+            .background(Theme.Colors.background)
+            .navigationTitle("Preview")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        showPhotoPreview = false
+                        pendingImage = nil
+                        pendingImageData = nil
+                    }
+                    .foregroundColor(Theme.Colors.primaryText)
+                }
+            }
+        }
     }
 
     // MARK: - Quick Actions
@@ -288,6 +380,17 @@ struct VerificationStatusView: View {
         defer { isRefreshing = false }
         await authStore.loadProfileStatus()
         await authStore.loadCurrentUser()
+        // Only clear preview if backend says no photo exists (deleted/none)
+        if authStore.currentUser?.profilePhoto == nil {
+            photoUploader.previewImage = nil
+        }
+        // Debug: log what photo URL we have
+        if let photo = authStore.currentUser?.profilePhoto {
+            print("[AVATAR] profilePhoto: id=\(photo.id) status=\(photo.status) url256=\(photo.url256 ?? "nil") version=\(photo.version ?? "nil")")
+            print("[AVATAR] resolved displayURL: \(photo.displayURL?.absoluteString ?? "nil")")
+        } else {
+            print("[AVATAR] profilePhoto is nil")
+        }
     }
 }
 
@@ -298,6 +401,10 @@ struct AvatarImageView: View {
     let photoURL: URL?
     let isUploading: Bool
 
+    @State private var loadedImage: UIImage?
+    @State private var loadFailed = false
+    @State private var lastLoadedURL: URL?
+
     var body: some View {
         ZStack {
             if let preview = previewImage {
@@ -306,22 +413,15 @@ struct AvatarImageView: View {
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 60, height: 60)
                     .clipShape(Circle())
-            } else if let photoURL {
-                AsyncImage(url: photoURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 60, height: 60)
-                            .clipShape(Circle())
-                    case .failure:
-                        placeholderCircle
-                    default:
-                        ProgressView()
-                            .frame(width: 60, height: 60)
-                    }
-                }
+            } else if let loaded = loadedImage {
+                Image(uiImage: loaded)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 60, height: 60)
+                    .clipShape(Circle())
+            } else if photoURL != nil && !loadFailed {
+                ProgressView()
+                    .frame(width: 60, height: 60)
             } else {
                 placeholderCircle
             }
@@ -343,6 +443,52 @@ struct AvatarImageView: View {
                     .clipShape(Circle())
                     .offset(x: 22, y: 22)
             }
+        }
+        .task(id: photoURL) {
+            await loadImageFromURL()
+        }
+    }
+
+    private func loadImageFromURL() async {
+        guard let url = photoURL else {
+            loadedImage = nil
+            loadFailed = false
+            return
+        }
+
+        // Skip if already loaded this URL
+        if url == lastLoadedURL && loadedImage != nil { return }
+
+        loadFailed = false
+        loadedImage = nil
+
+        do {
+            var request = URLRequest(url: url)
+            // Add auth header in case backend requires it for media
+            if let token = TokenStore.shared.accessToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+
+            print("[AVATAR] Loading image from: \(url.absoluteString)")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                print("[AVATAR] Image load response: HTTP \(httpResponse.statusCode), \(data.count) bytes")
+            }
+
+            if let image = UIImage(data: data) {
+                loadedImage = image
+                lastLoadedURL = url
+                print("[AVATAR] Image loaded successfully")
+            } else {
+                print("[AVATAR] Failed to create UIImage from data (\(data.count) bytes)")
+                loadFailed = true
+            }
+        } catch {
+            print("[AVATAR] Image load error: \(error.localizedDescription)")
+            loadFailed = true
         }
     }
 

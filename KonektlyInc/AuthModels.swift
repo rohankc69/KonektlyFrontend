@@ -210,22 +210,32 @@ nonisolated struct ProfilePhoto: Decodable, Sendable, Equatable {
     var isActive: Bool { status == "active" }
     var isProcessing: Bool { status == "processing" }
 
-    /// Cache-busted URL for 256px avatar display
+    /// Cache-busted URL for 256px avatar display.
+    /// Handles both absolute (S3) and relative (local dev) URLs.
     var displayURL: URL? {
         guard let urlString = url256, !urlString.isEmpty else { return nil }
-        if let v = version {
-            return URL(string: "\(urlString)?v=\(v)")
-        }
-        return URL(string: urlString)
+        return resolveURL(urlString)
     }
 
     /// Cache-busted URL for 64px thumbnail
     var thumbnailURL: URL? {
         guard let urlString = url64, !urlString.isEmpty else { return nil }
-        if let v = version {
-            return URL(string: "\(urlString)?v=\(v)")
+        return resolveURL(urlString)
+    }
+
+    private func resolveURL(_ urlString: String) -> URL? {
+        var fullString: String
+        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
+            fullString = urlString
+        } else {
+            // Relative URL from backend - prepend base URL
+            fullString = Config.apiBaseURL.absoluteString + urlString
         }
-        return URL(string: urlString)
+        if let v = version, !v.isEmpty {
+            let separator = fullString.contains("?") ? "&" : "?"
+            fullString += "\(separator)v=\(v)"
+        }
+        return URL(string: fullString)
     }
 
     enum CodingKeys: String, CodingKey {

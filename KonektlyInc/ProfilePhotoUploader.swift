@@ -61,14 +61,13 @@ final class ProfilePhotoUploader: ObservableObject {
         }
     }
 
-    // MARK: - Process Selected Photo
+    // MARK: - Process Selected Photo (direct from PhotosPickerItem)
 
     func processSelectedPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
 
         state = .selecting
 
-        // Load image data from PhotosPicker
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             state = .error("Could not load the selected image.")
             return
@@ -79,18 +78,22 @@ final class ProfilePhotoUploader: ObservableObject {
             return
         }
 
-        state = .validating
-        previewImage = uiImage
+        await uploadFromConfirmedImage(image: uiImage, originalData: data)
+    }
 
-        // Determine content type
-        let contentType = detectContentType(data: data)
+    // MARK: - Upload from Confirmed Image (after preview confirmation)
+
+    func uploadFromConfirmedImage(image: UIImage, originalData: Data) async {
+        state = .validating
+        previewImage = image
+
+        let contentType = detectContentType(data: originalData)
         guard allowedTypes.contains(contentType) else {
             state = .error("Unsupported format. Please use JPEG, PNG, or WebP.")
             return
         }
 
-        // Re-encode as JPEG for consistent upload (controls size)
-        guard let jpegData = uiImage.jpegData(compressionQuality: 0.85) else {
+        guard let jpegData = image.jpegData(compressionQuality: 0.85) else {
             state = .error("Could not process the image.")
             return
         }
@@ -100,7 +103,6 @@ final class ProfilePhotoUploader: ObservableObject {
             return
         }
 
-        // Compute SHA-256
         let hash = SHA256.hash(data: jpegData)
         let sha256 = hash.compactMap { String(format: "%02x", $0) }.joined()
 
@@ -169,6 +171,8 @@ final class ProfilePhotoUploader: ObservableObject {
                 if let user = confirmResp.user {
                     AuthStore.shared.updateUser(user)
                 }
+                // Keep previewImage so avatar shows immediately
+                // Backend URL will be used on next app launch when previewImage is nil
             }
 
         } catch let appError as AppError {
