@@ -384,3 +384,172 @@ final class ConfigTests: XCTestCase {
         #endif
     }
 }
+
+// MARK: - ProfilePhoto Tests
+
+final class ProfilePhotoTests: XCTestCase {
+    private let decoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }()
+    private let encoder = JSONEncoder()
+
+    // MARK: - ProfilePhoto Model
+
+    func test_profilePhoto_activeStatus() throws {
+        let json = """
+        {"id":1,"status":"active","url_64":"https://cdn.example.com/64.jpg","url_256":"https://cdn.example.com/256.jpg","activated_at":"2026-03-03T10:00:00Z","version":"abc123"}
+        """.data(using: .utf8)!
+        let photo = try decoder.decode(ProfilePhoto.self, from: json)
+        XCTAssertEqual(photo.id, 1)
+        XCTAssertTrue(photo.isActive)
+        XCTAssertFalse(photo.isProcessing)
+        XCTAssertEqual(photo.displayURL?.absoluteString, "https://cdn.example.com/256.jpg?v=abc123")
+        XCTAssertEqual(photo.thumbnailURL?.absoluteString, "https://cdn.example.com/64.jpg?v=abc123")
+    }
+
+    func test_profilePhoto_processingStatus() throws {
+        let json = """
+        {"id":2,"status":"processing","url_64":"","url_256":"","activated_at":null,"version":"v1"}
+        """.data(using: .utf8)!
+        let photo = try decoder.decode(ProfilePhoto.self, from: json)
+        XCTAssertTrue(photo.isProcessing)
+        XCTAssertFalse(photo.isActive)
+        XCTAssertNil(photo.displayURL, "Empty url_256 should return nil displayURL")
+        XCTAssertNil(photo.thumbnailURL, "Empty url_64 should return nil thumbnailURL")
+    }
+
+    func test_profilePhoto_cacheBust_noVersion() throws {
+        let json = """
+        {"id":3,"status":"active","url_64":null,"url_256":"https://cdn.example.com/256.jpg","activated_at":null,"version":null}
+        """.data(using: .utf8)!
+        let photo = try decoder.decode(ProfilePhoto.self, from: json)
+        XCTAssertEqual(photo.displayURL?.absoluteString, "https://cdn.example.com/256.jpg",
+                       "No version should produce URL without ?v=")
+    }
+
+    // MARK: - AuthUser with ProfilePhoto
+
+    func test_authUser_withProfilePhoto() throws {
+        let json = """
+        {"id":1,"username":"user","phone":"+1234","email":"","first_name":"A","last_name":"B","date_of_birth":"2000-01-01","is_email_verified":false,"is_active_profile":false,"terms_accepted_at":null,"terms_version":null,"worker_profile":null,"business_profile":null,"access_tier":"phone_verified","phone_verified_at":"2026-01-01T00:00:00Z","email_verified_at":null,"profile_photo":{"id":5,"status":"active","url_64":"https://cdn.example.com/64.jpg","url_256":"https://cdn.example.com/256.jpg","activated_at":"2026-03-03T10:00:00Z","version":"v2"}}
+        """.data(using: .utf8)!
+        let user = try decoder.decode(AuthUser.self, from: json)
+        XCTAssertNotNil(user.profilePhoto)
+        XCTAssertEqual(user.profilePhoto?.id, 5)
+        XCTAssertTrue(user.profilePhoto?.isActive ?? false)
+    }
+
+    func test_authUser_withoutProfilePhoto() throws {
+        let json = """
+        {"id":1,"username":"user","phone":"+1234","email":"","first_name":null,"last_name":null,"date_of_birth":null,"is_email_verified":false,"is_active_profile":false,"terms_accepted_at":null,"terms_version":null,"worker_profile":null,"business_profile":null,"access_tier":"phone_verified","phone_verified_at":null,"email_verified_at":null,"profile_photo":null}
+        """.data(using: .utf8)!
+        let user = try decoder.decode(AuthUser.self, from: json)
+        XCTAssertNil(user.profilePhoto)
+    }
+
+    // MARK: - Upload Request Encoding
+
+    func test_photoUploadURLRequest_encoding() throws {
+        let req = PhotoUploadURLRequest(
+            fileName: "avatar.jpg",
+            contentType: "image/jpeg",
+            sizeBytes: 123456,
+            sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        )
+        let data = try encoder.encode(req)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["file_name"] as? String, "avatar.jpg")
+        XCTAssertEqual(json?["content_type"] as? String, "image/jpeg")
+        XCTAssertEqual(json?["size_bytes"] as? Int, 123456)
+        XCTAssertNotNil(json?["sha256"])
+    }
+
+    func test_photoConfirmRequest_encoding() throws {
+        let req = PhotoConfirmRequest(photoId: 42)
+        let data = try encoder.encode(req)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["photo_id"] as? Int, 42)
+    }
+
+    // MARK: - Upload URL Response Decoding
+
+    func test_photoUploadURLResponse_decoding() throws {
+        let json = """
+        {"photo_id":10,"upload":{"method":"POST","url":"https://s3.amazonaws.com/bucket","fields":{"key":"photos/10.jpg","policy":"abc","x-amz-signature":"def"},"expires_in_seconds":300}}
+        """.data(using: .utf8)!
+        let resp = try decoder.decode(PhotoUploadURLResponse.self, from: json)
+        XCTAssertEqual(resp.photoId, 10)
+        XCTAssertEqual(resp.upload.method, "POST")
+        XCTAssertEqual(resp.upload.fields["key"], "photos/10.jpg")
+        XCTAssertEqual(resp.upload.expiresInSeconds, 300)
+    }
+
+    func test_photoUploadURLResponse_localDevMode() throws {
+        let json = """
+        {"photo_id":11,"upload":{"method":"POST","url":"/api/v1/auth/profile/photo/upload-local/","fields":{},"expires_in_seconds":300}}
+        """.data(using: .utf8)!
+        let resp = try decoder.decode(PhotoUploadURLResponse.self, from: json)
+        XCTAssertTrue(resp.upload.url.hasPrefix("/"), "Local upload URL should start with /")
+        XCTAssertTrue(resp.upload.fields.isEmpty, "Local upload should have empty fields")
+    }
+
+    // MARK: - Confirm Response Decoding
+
+    func test_photoConfirmResponse_active() throws {
+        let json = """
+        {"profile_photo":{"id":10,"status":"active","url_64":"https://cdn/64.jpg","url_256":"https://cdn/256.jpg","activated_at":"2026-03-03T10:00:00Z","version":"v1"},"user":null}
+        """.data(using: .utf8)!
+        let resp = try decoder.decode(PhotoConfirmResponse.self, from: json)
+        XCTAssertTrue(resp.profilePhoto.isActive)
+        XCTAssertNil(resp.user)
+    }
+
+    func test_photoConfirmResponse_processing() throws {
+        let json = """
+        {"profile_photo":{"id":10,"status":"processing","url_64":"","url_256":"","activated_at":null,"version":"v1"},"user":null}
+        """.data(using: .utf8)!
+        let resp = try decoder.decode(PhotoConfirmResponse.self, from: json)
+        XCTAssertTrue(resp.profilePhoto.isProcessing)
+        XCTAssertFalse(resp.profilePhoto.isActive)
+    }
+
+    // MARK: - PhotoUploadState
+
+    func test_uploadState_isActive() {
+        XCTAssertFalse(isStateActive(.idle))
+        XCTAssertTrue(isStateActive(.selecting))
+        XCTAssertTrue(isStateActive(.validating))
+        XCTAssertTrue(isStateActive(.uploading(progress: 0.5)))
+        XCTAssertTrue(isStateActive(.confirming))
+        XCTAssertTrue(isStateActive(.processing(photoId: 1, elapsed: 5)))
+        XCTAssertFalse(isStateActive(.success(ProfilePhoto(id: 1, status: "active", url64: nil, url256: nil, activatedAt: nil, version: nil))))
+        XCTAssertFalse(isStateActive(.error("fail")))
+    }
+
+    private func isStateActive(_ state: PhotoUploadState) -> Bool {
+        switch state {
+        case .idle, .success, .error: return false
+        default: return true
+        }
+    }
+
+    // MARK: - Endpoint Paths
+
+    func test_photoEndpoints_correctPaths() {
+        let uploadURL = Endpoint.photoUploadURL(PhotoUploadURLRequest(
+            fileName: "a.jpg", contentType: "image/jpeg", sizeBytes: 100, sha256: nil
+        ))
+        XCTAssertEqual(uploadURL.path, "/api/v1/auth/profile/photo/upload-url/")
+        XCTAssertEqual(uploadURL.method, .post)
+
+        let confirm = Endpoint.photoConfirm(PhotoConfirmRequest(photoId: 1))
+        XCTAssertEqual(confirm.path, "/api/v1/auth/profile/photo/confirm/")
+        XCTAssertEqual(confirm.method, .post)
+
+        let delete = Endpoint.photoDelete
+        XCTAssertEqual(delete.path, "/api/v1/auth/profile/photo/")
+        XCTAssertEqual(delete.method, .delete)
+    }
+}

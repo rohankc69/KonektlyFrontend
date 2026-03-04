@@ -120,6 +120,122 @@ actor APIClient {
         try await request(endpoint, authenticated: false)
     }
 
+    /// Authenticated request that also returns the HTTP status code.
+    /// Used by confirm endpoint to distinguish 200 (active) from 202 (processing).
+    func requestWithStatus<T: Decodable>(
+        _ endpoint: Endpoint,
+        authenticated: Bool = true
+    ) async throws -> (T, Int) {
+        let urlRequest = try buildRequest(endpoint: endpoint, authenticated: authenticated)
+        return try await executeWithStatus(urlRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 0)
+    }
+
+    /// Upload file to S3 using presigned POST fields.
+    /// Returns the HTTP status code (expect 201 or 204).
+    func uploadToS3(
+        url: String,
+        fields: [String: String],
+        fileData: Data,
+        contentType: String,
+        fileName: String
+    ) async throws -> Int {
+        guard let uploadURL = URL(string: url) else { throw AppError.unknown }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120
+
+        var body = Data()
+
+        // Add all presigned fields first
+        for (key, value) in fields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+
+        // Append file as the last field (required by S3)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        print("[API] [POST S3] \(url) (\(fileData.count) bytes)")
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.unknown
+        }
+
+        print("[API] S3 upload status: \(httpResponse.statusCode)")
+
+        guard httpResponse.statusCode == 201 || httpResponse.statusCode == 204 else {
+            throw AppError.apiError(code: .uploadFailed, message: "S3 upload returned \(httpResponse.statusCode)")
+        }
+
+        return httpResponse.statusCode
+    }
+
+    /// Upload file to backend local storage (dev mode).
+    /// The backend returns upload.url as a relative path like /api/v1/auth/profile/photo/upload-local/.
+    /// Requires Bearer auth header and photo_id in the form body.
+    func uploadLocal(
+        path: String,
+        photoId: Int,
+        fileData: Data,
+        contentType: String,
+        fileName: String
+    ) async throws -> Int {
+        let url = Config.apiBaseURL.appendingPathComponent(path)
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120
+
+        if let token = TokenStore.shared.accessToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        var body = Data()
+
+        // photo_id field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"photo_id\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(photoId)\r\n".data(using: .utf8)!)
+
+        // file field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        print("[API] [POST LOCAL] \(url.absoluteString) (\(fileData.count) bytes)")
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.unknown
+        }
+
+        print("[API] Local upload status: \(httpResponse.statusCode)")
+
+        guard (200...204).contains(httpResponse.statusCode) else {
+            throw AppError.apiError(code: .uploadFailed, message: "Local upload returned \(httpResponse.statusCode)")
+        }
+
+        return httpResponse.statusCode
+    }
+
     // MARK: - Build URLRequest
 
     private func buildRequest(endpoint: Endpoint, authenticated: Bool) throws -> URLRequest {
@@ -205,6 +321,58 @@ actor APIClient {
         }
 
         return try decodeResponse(data: data, statusCode: httpResponse.statusCode)
+    }
+
+    /// Same as execute but also returns the HTTP status code.
+    private func executeWithStatus<T: Decodable>(
+        _ request: URLRequest,
+        endpoint: Endpoint,
+        authenticated: Bool,
+        retryCount: Int
+    ) async throws -> (T, Int) {
+        let urlString = request.url?.absoluteString ?? "?"
+        print("[API] [\(endpoint.method.rawValue)] \(urlString)")
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            print("[API] Network error for \(urlString): \(error)")
+            throw AppError.network(underlying: error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.unknown
+        }
+
+        let statusCode = httpResponse.statusCode
+        print("[API] HTTP \(statusCode) <- \(urlString)")
+        if let body = String(data: data, encoding: .utf8) {
+            let truncated = body.count > 1000 ? String(body.prefix(1000)) + "...<truncated>" : body
+            print("[API] Response body: \(truncated)")
+        }
+
+        if statusCode == 429 {
+            let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+            throw AppError.rateLimited(retryAfter: retryAfter)
+        }
+        if statusCode == 409 {
+            let msg = parseErrorMessage(data: data) ?? "This profile is already verified and cannot be changed."
+            throw AppError.conflict(message: msg)
+        }
+        if statusCode == 503 {
+            let msg = parseErrorMessage(data: data) ?? "Service is temporarily unavailable. Please try again later."
+            throw AppError.serviceUnavailable(message: msg)
+        }
+        if statusCode == 401 && authenticated && retryCount == 0 {
+            let newToken = try await refreshAccessToken()
+            var retryRequest = request
+            retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+            return try await executeWithStatus(retryRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 1)
+        }
+
+        let decoded: T = try decodeResponse(data: data, statusCode: statusCode)
+        return (decoded, statusCode)
     }
 
     // MARK: - Token Refresh
@@ -391,4 +559,17 @@ extension Endpoint {
 
     static let profileStatus = Endpoint(path: "/api/v1/profiles/status/", method: .get)
     static let accessTier = Endpoint(path: "/api/v1/access-tier/", method: .get)
+
+    // Photo
+    static func photoUploadURL(_ req: PhotoUploadURLRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/profile/photo/upload-url/", method: .post,
+                 body: AnyEncodable(req))
+    }
+
+    static func photoConfirm(_ req: PhotoConfirmRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/profile/photo/confirm/", method: .post,
+                 body: AnyEncodable(req))
+    }
+
+    static let photoDelete = Endpoint(path: "/api/v1/auth/profile/photo/", method: .delete)
 }

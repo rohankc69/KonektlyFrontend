@@ -6,11 +6,15 @@
 //
 
 import SwiftUI
+import PhotosUI
 
 struct VerificationStatusView: View {
     @EnvironmentObject private var authStore: AuthStore
+    @StateObject private var photoUploader = ProfilePhotoUploader()
     @State private var isRefreshing = false
     @State private var showEmailVerification = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var showDeleteConfirm = false
 
     private var user: AuthUser? { authStore.currentUser }
     private var status: ProfileStatus? { authStore.profileStatus }
@@ -45,6 +49,29 @@ struct VerificationStatusView: View {
             }
             .background(Theme.Colors.background)
             .refreshable { await refresh() }
+            .overlay(alignment: .top) {
+                // Photo upload error/success banner
+                if case .error(let msg) = photoUploader.state {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text(msg)
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button { photoUploader.reset() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .padding(Theme.Spacing.md)
+                    .background(Theme.Colors.error)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.top, Theme.Spacing.sm)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.3), value: photoUploader.state)
+                }
+            }
             .sheet(isPresented: $showEmailVerification) {
                 NavigationStack {
                     EmailVerificationView()
@@ -72,16 +99,57 @@ struct VerificationStatusView: View {
 
             Spacer()
 
-            // Avatar circle
-            ZStack {
-                Circle()
-                    .fill(Color(UIColor.systemGray5))
-                    .frame(width: 60, height: 60)
-                Image(systemName: "person.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(Color(UIColor.systemGray2))
+            // Avatar - clickable to upload
+            avatarView
+        }
+    }
+
+    // MARK: - Avatar
+
+    private var avatarView: some View {
+        let previewImg = photoUploader.previewImage
+        let isUploading = photoUploader.isActive
+        let photoURL = user?.profilePhoto?.displayURL
+        let hasPhoto = user?.profilePhoto != nil
+
+        return PhotosPicker(
+            selection: $selectedPhotoItem,
+            matching: .images,
+            photoLibrary: .shared()
+        ) {
+            AvatarImageView(
+                previewImage: previewImg,
+                photoURL: photoURL,
+                isUploading: isUploading
+            )
+        }
+        .disabled(isUploading)
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                await photoUploader.processSelectedPhoto(newItem)
+                selectedPhotoItem = nil
             }
         }
+        .contextMenu {
+            if hasPhoto {
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Label("Remove Photo", systemImage: "trash")
+                }
+            }
+        }
+        .alert("Remove Photo", isPresented: $showDeleteConfirm) {
+            Button("Remove", role: .destructive) {
+                Task { await photoUploader.deletePhoto() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your profile photo will be removed.")
+        }
+        .accessibilityLabel("Profile photo. Tap to change.")
+        .accessibilityHint("Opens photo picker to upload a new profile photo")
     }
 
     // MARK: - Quick Actions
@@ -220,6 +288,73 @@ struct VerificationStatusView: View {
         defer { isRefreshing = false }
         await authStore.loadProfileStatus()
         await authStore.loadCurrentUser()
+    }
+}
+
+// MARK: - Avatar Image View
+
+struct AvatarImageView: View {
+    let previewImage: UIImage?
+    let photoURL: URL?
+    let isUploading: Bool
+
+    var body: some View {
+        ZStack {
+            if let preview = previewImage {
+                Image(uiImage: preview)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 60, height: 60)
+                    .clipShape(Circle())
+            } else if let photoURL {
+                AsyncImage(url: photoURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 60, height: 60)
+                            .clipShape(Circle())
+                    case .failure:
+                        placeholderCircle
+                    default:
+                        ProgressView()
+                            .frame(width: 60, height: 60)
+                    }
+                }
+            } else {
+                placeholderCircle
+            }
+
+            if isUploading {
+                Circle()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 60, height: 60)
+                ProgressView()
+                    .tint(.white)
+            }
+
+            if !isUploading {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(4)
+                    .background(Color.black)
+                    .clipShape(Circle())
+                    .offset(x: 22, y: 22)
+            }
+        }
+    }
+
+    private var placeholderCircle: some View {
+        ZStack {
+            Circle()
+                .fill(Color(UIColor.systemGray5))
+                .frame(width: 60, height: 60)
+            Image(systemName: "person.fill")
+                .font(.system(size: 28))
+                .foregroundColor(Color(UIColor.systemGray2))
+        }
     }
 }
 

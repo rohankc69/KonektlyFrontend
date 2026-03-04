@@ -78,6 +78,12 @@ nonisolated enum APIErrorCode: String, Sendable {
     case validationError = "VALIDATION_ERROR"
     // Generic
     case rateLimited = "RATE_LIMITED"
+    // Photo
+    case invalidFileType = "INVALID_FILE_TYPE"
+    case fileTooLarge = "FILE_TOO_LARGE"
+    case uploadFailed = "UPLOAD_FAILED"
+    case photoNotFound = "PHOTO_NOT_FOUND"
+    case phoneNotVerified = "PHONE_NOT_VERIFIED"
     case internalServerError = "INTERNAL_SERVER_ERROR"
     case serverError = "SERVER_ERROR"
     case unknown = "UNKNOWN"
@@ -102,6 +108,11 @@ nonisolated enum APIErrorCode: String, Sendable {
         case .conflict: return "This profile has already been verified and cannot be changed."
         case .validationError: return "Please check the information you entered."
         case .rateLimited: return "You're doing that too fast. Please wait a moment."
+        case .invalidFileType: return "Unsupported file format. Please use JPEG, PNG, or WebP."
+        case .fileTooLarge: return "File is too large. Maximum size is 5 MB."
+        case .uploadFailed: return "Photo upload failed. Please try again."
+        case .photoNotFound: return "Photo not found."
+        case .phoneNotVerified: return "Please verify your phone number first."
         case .internalServerError: return "Something went wrong on our end. Please try again."
         case .serverError: return "Something went wrong on our end. Please try again."
         case .unknown: return "An unexpected error occurred. Please try again."
@@ -186,6 +197,45 @@ nonisolated struct MeResponse: Decodable, Sendable {
     let user: AuthUser
 }
 
+// MARK: - Profile Photo
+
+nonisolated struct ProfilePhoto: Decodable, Sendable, Equatable {
+    let id: Int
+    let status: String
+    let url64: String?
+    let url256: String?
+    let activatedAt: String?
+    let version: String?
+
+    var isActive: Bool { status == "active" }
+    var isProcessing: Bool { status == "processing" }
+
+    /// Cache-busted URL for 256px avatar display
+    var displayURL: URL? {
+        guard let urlString = url256, !urlString.isEmpty else { return nil }
+        if let v = version {
+            return URL(string: "\(urlString)?v=\(v)")
+        }
+        return URL(string: urlString)
+    }
+
+    /// Cache-busted URL for 64px thumbnail
+    var thumbnailURL: URL? {
+        guard let urlString = url64, !urlString.isEmpty else { return nil }
+        if let v = version {
+            return URL(string: "\(urlString)?v=\(v)")
+        }
+        return URL(string: urlString)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, version
+        case url64 = "url_64"
+        case url256 = "url_256"
+        case activatedAt = "activated_at"
+    }
+}
+
 // MARK: - Me / Current User
 
 nonisolated struct AuthUser: Decodable, Sendable, Equatable {
@@ -205,6 +255,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
     let accessTier: String?
     let phoneVerifiedAt: String?
     let emailVerifiedAt: String?
+    let profilePhoto: ProfilePhoto?
 
     var emailVerified: Bool { isEmailVerified }
 
@@ -256,6 +307,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
         case accessTier = "access_tier"
         case phoneVerifiedAt = "phone_verified_at"
         case emailVerifiedAt = "email_verified_at"
+        case profilePhoto = "profile_photo"
     }
 
     static func == (lhs: AuthUser, rhs: AuthUser) -> Bool {
@@ -269,6 +321,7 @@ nonisolated struct AuthUser: Decodable, Sendable, Equatable {
             && lhs.isActiveProfile == rhs.isActiveProfile
             && lhs.termsAcceptedAt == rhs.termsAcceptedAt
             && lhs.accessTier == rhs.accessTier
+            && lhs.profilePhoto == rhs.profilePhoto
     }
 }
 
@@ -404,5 +457,61 @@ nonisolated struct AccessTier: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case accessTier = "access_tier"
+    }
+}
+
+// MARK: - Profile Photo Upload
+
+nonisolated struct PhotoUploadURLRequest: Encodable, Sendable {
+    let fileName: String
+    let contentType: String
+    let sizeBytes: Int
+    let sha256: String?
+
+    enum CodingKeys: String, CodingKey {
+        case fileName = "file_name"
+        case contentType = "content_type"
+        case sizeBytes = "size_bytes"
+        case sha256
+    }
+}
+
+nonisolated struct PhotoUploadURLResponse: Decodable, Sendable {
+    let photoId: Int
+    let upload: S3UploadInfo
+
+    enum CodingKeys: String, CodingKey {
+        case photoId = "photo_id"
+        case upload
+    }
+}
+
+nonisolated struct S3UploadInfo: Decodable, Sendable {
+    let method: String
+    let url: String
+    let fields: [String: String]
+    let expiresInSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case method, url, fields
+        case expiresInSeconds = "expires_in_seconds"
+    }
+}
+
+nonisolated struct PhotoConfirmRequest: Encodable, Sendable {
+    let photoId: Int
+
+    enum CodingKeys: String, CodingKey {
+        case photoId = "photo_id"
+    }
+}
+
+nonisolated struct PhotoConfirmResponse: Decodable, Sendable {
+    let profilePhoto: ProfilePhoto
+    let user: AuthUser?
+
+    enum CodingKeys: String, CodingKey {
+        case profilePhoto = "profile_photo"
+        case user
     }
 }

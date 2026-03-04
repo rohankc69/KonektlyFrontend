@@ -68,16 +68,9 @@ final class AuthStore: ObservableObject {
         if !user.hasAcceptedTerms { return .terms }
 
         let role = selectedRole
-        let hasProfile: Bool
-        if let status = profileStatus {
-            hasProfile = role == .worker
-                ? user.hasCompleteWorkerProfile
-                : user.hasCompleteBusinessProfile
-        } else {
-            hasProfile = role == .worker
-                ? user.hasCompleteWorkerProfile
-                : user.hasCompleteBusinessProfile
-        }
+        let hasProfile = role == .worker
+            ? user.hasCompleteWorkerProfile
+            : user.hasCompleteBusinessProfile
 
         if let status = profileStatus {
             let isRejected = role == .worker
@@ -329,4 +322,9 @@ final class AuthStore: ObservableObject {
 
     func clearError() { error = nil }
     func setError(_ err: AppError) { error = err }
+
+    /// Update user in-place (used by ProfilePhotoUploader after upload confirm)
+    func updateUser(_ user: AuthUser) {
+        authState = .authenticated(user: user)
+    }
 }
