@@ -89,8 +89,23 @@ final class AuthStore: ObservableObject {
     // MARK: - Bootstrap
 
     func bootstrapIfNeeded() async {
-        guard TokenStore.shared.accessToken != nil else { return }
+        guard TokenStore.shared.accessToken != nil else {
+            print("[AUTH] bootstrap: no access token, skipping")
+            return
+        }
+        print("[AUTH] bootstrap: found access token, loading user...")
         await loadCurrentUser()
+        if let user = currentUser {
+            print("[AUTH] bootstrap: user loaded, id=\(user.id)")
+            if let photo = user.profilePhoto {
+                print("[AUTH] bootstrap: profilePhoto id=\(photo.id) status=\(photo.status) url256=\(photo.url256 ?? "nil") version=\(photo.version ?? "nil")")
+                print("[AUTH] bootstrap: displayURL=\(photo.displayURL?.absoluteString ?? "nil")")
+            } else {
+                print("[AUTH] bootstrap: profilePhoto is nil")
+            }
+        } else {
+            print("[AUTH] bootstrap: user is nil after loadCurrentUser")
+        }
     }
 
     // MARK: - Send OTP
@@ -176,9 +191,14 @@ final class AuthStore: ObservableObject {
     func loadCurrentUser() async {
         do {
             let response: MeResponse = try await APIClient.shared.request(.me)
+            print("[AUTH] loadCurrentUser: got user id=\(response.user.id) photo=\(response.user.profilePhoto != nil ? "exists" : "nil")")
+            if let photo = response.user.profilePhoto {
+                print("[AUTH] loadCurrentUser: photo id=\(photo.id) status=\(photo.status) url256=\(photo.url256 ?? "nil")")
+            }
             authState = .authenticated(user: response.user)
             await loadProfileStatus()
         } catch AppError.unauthorized {
+            print("[AUTH] loadCurrentUser: unauthorized, signing out")
             signOut()
         } catch {
             print("[AUTH] loadCurrentUser failed: \(error)")

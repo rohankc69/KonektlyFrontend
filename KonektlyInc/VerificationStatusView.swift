@@ -447,6 +447,14 @@ struct AvatarImageView: View {
         .task(id: photoURL) {
             await loadImageFromURL()
         }
+        .onChange(of: photoURL) { _, newURL in
+            if newURL != nil && loadedImage == nil {
+                Task { await loadImageFromURL() }
+            }
+        }
+        .onAppear {
+            print("[AVATAR VIEW] appeared: previewImage=\(previewImage != nil) photoURL=\(photoURL?.absoluteString ?? "nil") loadedImage=\(loadedImage != nil)")
+        }
     }
 
     private func loadImageFromURL() async {
