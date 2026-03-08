@@ -87,6 +87,15 @@ nonisolated enum APIErrorCode: String, Sendable {
     case internalServerError = "INTERNAL_SERVER_ERROR"
     case serverError = "SERVER_ERROR"
     case unknown = "UNKNOWN"
+    // Jobs
+    case locationRequired = "LOCATION_REQUIRED"
+    case invalidParams = "INVALID_PARAMS"
+    case geocodeFailed = "GEOCODE_FAILED"
+    case jobNotOpen = "JOB_NOT_OPEN"
+    case alreadyApplied = "ALREADY_APPLIED"
+    case applicationAlreadyProcessed = "APPLICATION_ALREADY_PROCESSED"
+    case notFound = "NOT_FOUND"
+    case permissionDenied = "PERMISSION_DENIED"
 
     var userFacingMessage: String {
         switch self {
@@ -116,6 +125,15 @@ nonisolated enum APIErrorCode: String, Sendable {
         case .internalServerError: return "Something went wrong on our end. Please try again."
         case .serverError: return "Something went wrong on our end. Please try again."
         case .unknown: return "An unexpected error occurred. Please try again."
+        // Jobs
+        case .locationRequired: return "Allow location access or enter your postal code."
+        case .invalidParams: return "Invalid request parameters."
+        case .geocodeFailed: return "Address not found — try a different address or use GPS."
+        case .jobNotOpen: return "This job is no longer accepting applications."
+        case .alreadyApplied: return "You have already applied for this job."
+        case .applicationAlreadyProcessed: return "This application has already been processed."
+        case .notFound: return "The requested item could not be found."
+        case .permissionDenied: return "You don't have permission to perform this action."
         }
     }
 }
@@ -524,4 +542,243 @@ nonisolated struct PhotoConfirmResponse: Decodable, Sendable {
         case profilePhoto = "profile_photo"
         case user
     }
+}
+
+// MARK: - Jobs API Models
+
+// MARK: Job (returned by POST /jobs/ and GET /jobs/nearby/)
+nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
+    let id: Int
+    let clientId: Int
+    let title: String
+    let description: String?
+    let addressDisplay: String?
+    let status: String            // "open" | "filled" | "cancelled" | "completed"
+    let payRate: String           // decimal string, e.g. "18.50"
+    let scheduledStart: Date
+    let scheduledEnd: Date?
+    let distanceKm: Double?
+    let createdAt: Date
+
+    var statusEnum: JobStatus { JobStatus(rawValue: status) ?? .open }
+
+    /// Returns a copy of this job with a different status (used for local state mutations).
+    func withStatus(_ newStatus: JobStatus) -> APIJob {
+        APIJob(
+            id: id, clientId: clientId, title: title, description: description,
+            addressDisplay: addressDisplay, status: newStatus.rawValue, payRate: payRate,
+            scheduledStart: scheduledStart, scheduledEnd: scheduledEnd,
+            distanceKm: distanceKm, createdAt: createdAt
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case clientId = "client_id"
+        case title, description, status
+        case addressDisplay = "address_display"
+        case payRate = "pay_rate"
+        case scheduledStart = "scheduled_start"
+        case scheduledEnd = "scheduled_end"
+        case distanceKm = "distance_km"
+        case createdAt = "created_at"
+    }
+}
+
+// MARK: Job Status
+nonisolated enum JobStatus: String, Sendable, CaseIterable {
+    case open       = "open"
+    case filled     = "filled"
+    case cancelled  = "cancelled"
+    case completed  = "completed"
+}
+
+// MARK: Application Status
+nonisolated enum ApplicationStatus: String, Sendable, CaseIterable {
+    case pending  = "pending"
+    case accepted = "accepted"
+    case rejected = "rejected"
+}
+
+// MARK: Worker Verification Status (returned in nearby workers / applications)
+nonisolated enum WorkerVerificationStatus: String, Sendable {
+    case pending          = "pending"
+    case instantVerified  = "instant_verified"
+    case pendingManual    = "pending_manual"
+    case approvedManual   = "approved_manual"
+    case rejected         = "rejected"
+}
+
+// MARK: Nearby Worker (GET /jobs/{id}/workers/)
+nonisolated struct NearbyWorker: Decodable, Sendable, Identifiable, Equatable {
+    let id: Int
+    let firstName: String
+    let lastName: String
+    let verificationStatus: String
+    let distanceKm: Double?
+    let photoUrl: String?
+
+    var displayName: String { "\(firstName) \(lastName)" }
+    var verificationStatusEnum: WorkerVerificationStatus {
+        WorkerVerificationStatus(rawValue: verificationStatus) ?? .pending
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case firstName = "first_name"
+        case lastName  = "last_name"
+        case verificationStatus = "verification_status"
+        case distanceKm = "distance_km"
+        case photoUrl   = "photo_url"
+    }
+}
+
+// MARK: Application (GET /jobs/{id}/applications/ & POST /jobs/{id}/apply/)
+nonisolated struct JobApplication: Decodable, Sendable, Identifiable, Equatable {
+    let id: Int
+    let workerId: Int
+    let firstName: String
+    let lastName: String
+    let verificationStatus: String
+    let coverNote: String?
+    let status: String           // "pending" | "accepted" | "rejected"
+    let createdAt: Date
+
+    var displayName: String { "\(firstName) \(lastName)" }
+    var statusEnum: ApplicationStatus { ApplicationStatus(rawValue: status) ?? .pending }
+    var verificationStatusEnum: WorkerVerificationStatus {
+        WorkerVerificationStatus(rawValue: verificationStatus) ?? .pending
+    }
+
+    /// Returns a copy with a different status (used for local state mutations after hire).
+    func withStatus(_ newStatus: ApplicationStatus) -> JobApplication {
+        JobApplication(
+            id: id, workerId: workerId, firstName: firstName, lastName: lastName,
+            verificationStatus: verificationStatus, coverNote: coverNote,
+            status: newStatus.rawValue, createdAt: createdAt
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workerId = "worker_id"
+        case firstName = "first_name"
+        case lastName  = "last_name"
+        case verificationStatus = "verification_status"
+        case coverNote  = "cover_note"
+        case status
+        case createdAt  = "created_at"
+    }
+}
+
+// MARK: - Jobs Request / Response Wrappers
+
+// POST /api/v1/jobs/
+nonisolated struct PostJobRequest: Encodable, Sendable {
+    let title: String
+    let description: String?
+    let payRate: String          // decimal string
+    let scheduledStart: Date
+    let scheduledEnd: Date?
+    let lat: Double?
+    let lng: Double?
+    let address: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title, description
+        case payRate       = "pay_rate"
+        case scheduledStart = "scheduled_start"
+        case scheduledEnd   = "scheduled_end"
+        case lat, lng, address
+    }
+}
+
+nonisolated struct PostJobResponse: Decodable, Sendable {
+    let job: APIJob
+}
+
+// GET /api/v1/jobs/nearby/
+nonisolated struct NearbyJobsResponse: Decodable, Sendable {
+    let count: Int
+    let jobs: [APIJob]
+}
+
+// GET /api/v1/jobs/{id}/workers/
+nonisolated struct NearbyWorkersResponse: Decodable, Sendable {
+    let count: Int
+    let workers: [NearbyWorker]
+}
+
+// POST /api/v1/jobs/{id}/apply/
+nonisolated struct ApplyForJobRequest: Encodable, Sendable {
+    let coverNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case coverNote = "cover_note"
+    }
+}
+
+nonisolated struct ApplyForJobResponse: Decodable, Sendable {
+    let application: JobApplication
+}
+
+// GET /api/v1/jobs/{jobId}/applications/
+nonisolated struct JobApplicationsResponse: Decodable, Sendable {
+    let count: Int
+    let applications: [JobApplication]
+}
+
+// POST /api/v1/jobs/{id}/hire/{app_id}/
+nonisolated struct HireWorkerResponse: Decodable, Sendable {
+    let application: JobApplication
+}
+
+// MARK: - My Applications (Worker)
+// GET /api/v1/my/applications/?status=pending|accepted|rejected
+// Each item embeds a job summary as returned by the backend.
+// NOTE: job.scheduled_end and job.client_id are NOT included in this response.
+// NOTE: distance_km is always null here — only populated on nearby search results.
+
+nonisolated struct MyApplicationItem: Decodable, Sendable, Identifiable, Equatable {
+    let id: Int                     // application id
+    let status: String              // "pending" | "accepted" | "rejected"
+    let coverNote: String?
+    let createdAt: Date
+    let updatedAt: Date
+    let job: MyApplicationJob
+
+    var statusEnum: ApplicationStatus { ApplicationStatus(rawValue: status) ?? .pending }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status
+        case coverNote  = "cover_note"
+        case createdAt  = "created_at"
+        case updatedAt  = "updated_at"
+        case job
+    }
+}
+
+/// Job summary as embedded inside GET /api/v1/my/applications/
+/// Fields are a strict subset of APIJob — scheduled_end and client_id are NOT returned here.
+nonisolated struct MyApplicationJob: Decodable, Sendable, Equatable {
+    let id: Int
+    let title: String
+    let status: String              // job status: "open" | "filled" | "cancelled" | "completed"
+    let payRate: String
+    let scheduledStart: Date
+    let addressDisplay: String?
+
+    var jobStatusEnum: JobStatus { JobStatus(rawValue: status) ?? .open }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status
+        case payRate        = "pay_rate"
+        case scheduledStart = "scheduled_start"
+        case addressDisplay = "address_display"
+    }
+}
+
+nonisolated struct MyApplicationsResponse: Decodable, Sendable {
+    let count: Int
+    let applications: [MyApplicationItem]
 }

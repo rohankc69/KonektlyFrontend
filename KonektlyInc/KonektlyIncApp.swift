@@ -52,11 +52,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 struct KonektlyIncApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var authStore = AuthStore.shared
+    @StateObject private var jobStore = JobStore.shared
+    @StateObject private var locationManager = LocationManager()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(authStore)
+                .environmentObject(jobStore)
+                .environmentObject(locationManager)
                 .task {
                     await authStore.bootstrapIfNeeded()
                 }

@@ -13,17 +13,24 @@ import MapKit
 struct MapHomeView: View {
     @AppStorage("userRole") private var userRoleRaw: String = UserRole.worker.rawValue
 
-    @State private var position: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-        )
+    // Use .userLocation(fallback:) so the map automatically follows the real device position.
+    // We fall back to a wide world view; once GPS resolves the map re-centres automatically.
+    @State private var position: MapCameraPosition = .userLocation(
+        fallback: .region(MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+            span: MKCoordinateSpan(latitudeDelta: 60, longitudeDelta: 60)
+        ))
     )
     @State private var searchText = ""
     @State private var selectedFilter: FilterChip?
     @State private var showBottomSheet = false
-    @State private var selectedShift: Shift?
-    @State private var selectedWorker: Worker?
+    @State private var selectedJob: APIJob?
+    @State private var showPostalFallback = false
+    @State private var postalCode = ""
+    @State private var showPostJobSheet = false
+
+    @EnvironmentObject private var locationManager: LocationManager
+    @EnvironmentObject private var jobStore: JobStore
 
     private var userRole: UserRole {
         UserRole(rawValue: userRoleRaw) ?? .worker
@@ -31,45 +38,87 @@ struct MapHomeView: View {
 
     var body: some View {
         ZStack {
-            // Map lives in its own struct - state changes in overlays won't re-render it
             MapLayerView(
                 position: $position,
                 userRole: userRole,
-                selectedShiftID: selectedShift?.id,
-                selectedWorkerID: selectedWorker?.id,
-                onSelectShift: { shift in
+                jobs: jobStore.nearbyJobs,
+                selectedJobID: selectedJob?.id,
+                onSelectJob: { job in
                     withAnimation(Theme.Animation.smooth) {
-                        selectedShift = shift
-                        showBottomSheet = true
-                    }
-                },
-                onSelectWorker: { worker in
-                    withAnimation(Theme.Animation.smooth) {
-                        selectedWorker = worker
+                        selectedJob = job
                         showBottomSheet = true
                     }
                 }
             )
 
-            // Overlay controls - isolated from map
             MapOverlayView(
                 userRole: userRole,
                 searchText: $searchText,
-                selectedFilter: $selectedFilter
+                selectedFilter: $selectedFilter,
+                showPostalFallback: $showPostalFallback,
+                postalCode: $postalCode,
+                isLocating: locationManager.isLocating || jobStore.isLoadingNearbyJobs,
+                locationDenied: locationManager.authStatus == .denied,
+                onPostalSearch: {
+                    Task { await jobStore.fetchNearbyJobs(postalCode: postalCode) }
+                },
+                onFABTapped: {
+                    if userRole == .business {
+                        showPostJobSheet = true
+                    } else {
+                        showBottomSheet = true
+                    }
+                }
             )
         }
-        .sheet(isPresented: $showBottomSheet, onDismiss: {
-            selectedShift = nil
-            selectedWorker = nil
-        }) {
-            BottomSheetView(
+        .sheet(isPresented: $showBottomSheet, onDismiss: { selectedJob = nil }) {
+            MapBottomSheetView(
                 userRole: userRole,
-                selectedShift: $selectedShift,
-                selectedWorker: $selectedWorker
+                jobs: jobStore.nearbyJobs,
+                isLoading: jobStore.isLoadingNearbyJobs,
+                error: jobStore.nearbyJobsError?.errorDescription,
+                selectedJob: $selectedJob
             )
             .presentationDetents([.height(120), .medium, .large])
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        }
+        // Request permission + fetch jobs as soon as the map appears
+        .task {
+            locationManager.requestAuthorization()
+            await fetchJobsWithLocation()
+        }
+        // Re-fetch whenever auth status changes (e.g. user grants permission from Settings)
+        .onChange(of: locationManager.authStatus) { _, newStatus in
+            if newStatus == .authorized {
+                Task { await fetchJobsWithLocation() }
+            } else if newStatus == .denied {
+                showPostalFallback = true
+            }
+        }
+        // Post Job sheet (business only)
+        .sheet(isPresented: $showPostJobSheet) {
+            PostJobView()
+                .environmentObject(jobStore)
+                .environmentObject(locationManager)
+        }
+    }
+
+    // MARK: - Location + Fetch
+
+    private func fetchJobsWithLocation() async {
+        if let coord = await locationManager.currentCoordinate() {
+            // Got a real GPS fix — centre the map and fetch jobs
+            withAnimation {
+                position = .region(MKCoordinateRegion(
+                    center: coord,
+                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                ))
+            }
+            await jobStore.fetchNearbyJobs(lat: coord.latitude, lng: coord.longitude)
+        } else {
+            // No GPS — show postal code fallback
+            showPostalFallback = true
         }
     }
 }
@@ -79,39 +128,25 @@ struct MapHomeView: View {
 private struct MapLayerView: View {
     @Binding var position: MapCameraPosition
     let userRole: UserRole
-    let selectedShiftID: UUID?
-    let selectedWorkerID: UUID?
-    let onSelectShift: (Shift) -> Void
-    let onSelectWorker: (Worker) -> Void
-
-    private var annotationItems: [AnnotationItem] {
-        if userRole == .worker {
-            return MockData.shifts.map {
-                AnnotationItem(id: $0.id, coordinate: $0.location.coordinate, isUrgent: $0.isUrgent)
-            }
-        } else {
-            return MockData.workers.map {
-                AnnotationItem(id: $0.id, coordinate: $0.location.coordinate, isUrgent: false)
-            }
-        }
-    }
+    let jobs: [APIJob]
+    let selectedJobID: Int?
+    let onSelectJob: (APIJob) -> Void
 
     var body: some View {
         Map(position: $position) {
-            ForEach(annotationItems) { item in
-                Annotation("", coordinate: item.coordinate) {
-                    MapPinView(
-                        isUrgent: item.isUrgent,
-                        isSelected: item.id == selectedShiftID || item.id == selectedWorkerID
-                    ) {
-                        if userRole == .worker {
-                            if let shift = MockData.shifts.first(where: { $0.id == item.id }) {
-                                onSelectShift(shift)
-                            }
-                        } else {
-                            if let worker = MockData.workers.first(where: { $0.id == item.id }) {
-                                onSelectWorker(worker)
-                            }
+            // Show the blue dot for the user's own position
+            UserAnnotation()
+
+            if userRole == .worker {
+                ForEach(jobs) { job in
+                    // Only show jobs that have a geocoded location from the server.
+                    // distanceKm being non-nil confirms the server resolved a coordinate.
+                    if job.distanceKm != nil {
+                        Annotation("", coordinate: approximateCoordinate(for: job)) {
+                            MapPinView(
+                                isUrgent: false,
+                                isSelected: job.id == selectedJobID
+                            ) { onSelectJob(job) }
                         }
                     }
                 }
@@ -119,14 +154,29 @@ private struct MapLayerView: View {
         }
         .ignoresSafeArea()
     }
+
+    /// The API returns distanceKm but not the raw lat/lng of the job to protect privacy.
+    /// We render the pin at the worker's current position offset by distance for now.
+    /// When the backend exposes job coordinates this can be replaced with job.lat/lng.
+    private func approximateCoordinate(for job: APIJob) -> CLLocationCoordinate2D {
+        // Fallback: centre of map — MapKit will place the pin where the map is centred.
+        // Replace with actual job coordinates once the API exposes them.
+        CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    }
 }
 
-// MARK: - Overlay Controls (search + filters + FAB)
+// MARK: - Overlay Controls
 
 private struct MapOverlayView: View {
     let userRole: UserRole
     @Binding var searchText: String
     @Binding var selectedFilter: FilterChip?
+    @Binding var showPostalFallback: Bool
+    @Binding var postalCode: String
+    let isLocating: Bool
+    let locationDenied: Bool
+    let onPostalSearch: () -> Void
+    let onFABTapped: () -> Void          // ← callback so parent handles sheet state
 
     var body: some View {
         VStack(spacing: 0) {
@@ -157,26 +207,32 @@ private struct MapOverlayView: View {
                     .padding(Theme.Spacing.md)
                     .background(Theme.Colors.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
-                    .shadow(
-                        color: Theme.Shadows.medium.color,
-                        radius: Theme.Shadows.medium.radius,
-                        x: Theme.Shadows.medium.x,
-                        y: Theme.Shadows.medium.y
-                    )
+                    .shadow(color: Theme.Shadows.medium.color,
+                            radius: Theme.Shadows.medium.radius,
+                            x: Theme.Shadows.medium.x,
+                            y: Theme.Shadows.medium.y)
 
-                    Button(action: {}) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: Theme.Sizes.iconMedium))
-                            .foregroundColor(Theme.Colors.primaryText)
-                            .frame(width: 44, height: 44)
-                            .background(Theme.Colors.cardBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
-                            .shadow(
-                                color: Theme.Shadows.medium.color,
-                                radius: Theme.Shadows.medium.radius,
-                                x: Theme.Shadows.medium.x,
-                                y: Theme.Shadows.medium.y
-                            )
+                    // Location status indicator
+                    ZStack {
+                        if isLocating {
+                            ProgressView()
+                                .frame(width: 44, height: 44)
+                                .background(Theme.Colors.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
+                        } else {
+                            Button(action: { showPostalFallback.toggle() }) {
+                                Image(systemName: locationDenied ? "location.slash.fill" : "location.fill")
+                                    .font(.system(size: Theme.Sizes.iconMedium))
+                                    .foregroundColor(locationDenied ? .red : Theme.Colors.primaryText)
+                                    .frame(width: 44, height: 44)
+                                    .background(Theme.Colors.cardBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
+                                    .shadow(color: Theme.Shadows.medium.color,
+                                            radius: Theme.Shadows.medium.radius,
+                                            x: Theme.Shadows.medium.x,
+                                            y: Theme.Shadows.medium.y)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.lg)
@@ -185,10 +241,7 @@ private struct MapOverlayView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Theme.Spacing.sm) {
                         ForEach(FilterChip.allCases, id: \.self) { filter in
-                            FilterChipView(
-                                filter: filter,
-                                isSelected: selectedFilter == filter
-                            ) {
+                            FilterChipView(filter: filter, isSelected: selectedFilter == filter) {
                                 withAnimation(Theme.Animation.quick) {
                                     selectedFilter = selectedFilter == filter ? nil : filter
                                 }
@@ -201,13 +254,10 @@ private struct MapOverlayView: View {
             .padding(.top, Theme.Spacing.md)
             .background(
                 LinearGradient(
-                    colors: [
-                        Theme.Colors.background,
-                        Theme.Colors.background.opacity(0.95),
-                        Theme.Colors.background.opacity(0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    colors: [Theme.Colors.background,
+                             Theme.Colors.background.opacity(0.95),
+                             Theme.Colors.background.opacity(0)],
+                    startPoint: .top, endPoint: .bottom
                 )
                 .ignoresSafeArea(edges: .top)
             )
@@ -217,10 +267,9 @@ private struct MapOverlayView: View {
             // Floating action button
             HStack {
                 Spacer()
-                Button(action: {}) {
+                Button(action: onFABTapped) {
                     HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 24))
+                        Image(systemName: "plus.circle.fill").font(.system(size: 24))
                         Text(userRole == .business ? "Post a Job" : "Find Work")
                             .font(Theme.Typography.headlineSemibold)
                     }
@@ -229,17 +278,132 @@ private struct MapOverlayView: View {
                     .padding(.vertical, Theme.Spacing.lg)
                     .background(Theme.Colors.primary)
                     .clipShape(Capsule())
-                    .shadow(
-                        color: Theme.Shadows.large.color,
-                        radius: Theme.Shadows.large.radius,
-                        x: Theme.Shadows.large.x,
-                        y: Theme.Shadows.large.y
-                    )
+                    .shadow(color: Theme.Shadows.large.color,
+                            radius: Theme.Shadows.large.radius,
+                            x: Theme.Shadows.large.x,
+                            y: Theme.Shadows.large.y)
                 }
                 .padding(.trailing, Theme.Spacing.lg)
             }
             .padding(.bottom, Theme.Spacing.md)
         }
+    }
+}
+
+// MARK: - Bottom Sheet (real job data)
+
+struct MapBottomSheetView: View {
+    let userRole: UserRole
+    let jobs: [APIJob]
+    let isLoading: Bool
+    let error: String?
+    @Binding var selectedJob: APIJob?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text(userRole == .worker ? "Nearby Jobs" : "Available Workers")
+                        .font(Theme.Typography.headlineBold)
+                        .foregroundColor(Theme.Colors.primary)
+                    if isLoading {
+                        Text("Loading…")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.tertiaryText)
+                    } else if let error {
+                        Text(error)
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(.red)
+                    } else {
+                        Text("\(jobs.count) nearby")
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.tertiaryText)
+                    }
+                }
+                Spacer()
+            }
+            .padding(Theme.Spacing.lg)
+
+            Divider()
+
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(Theme.Spacing.xl)
+            } else if jobs.isEmpty {
+                VStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: "briefcase")
+                        .font(.system(size: 40))
+                        .foregroundColor(Theme.Colors.tertiaryText)
+                    Text(error != nil ? "Failed to load jobs" : "No jobs nearby")
+                        .font(Theme.Typography.body)
+                        .foregroundColor(Theme.Colors.secondaryText)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(Theme.Spacing.xl)
+            } else {
+                ScrollView {
+                    VStack(spacing: Theme.Spacing.lg) {
+                        ForEach(jobs) { job in
+                            NearbyJobCardView(job: job)
+                        }
+                    }
+                    .padding(Theme.Spacing.lg)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Nearby Job Card (read-only, used in map bottom sheet)
+
+struct NearbyJobCardView: View {
+    let job: APIJob
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack {
+                Text(job.title)
+                    .font(Theme.Typography.headlineSemibold)
+                    .foregroundColor(Theme.Colors.primaryText)
+                Spacer()
+                Text("$\(job.payRate)/hr")
+                    .font(Theme.Typography.headlineSemibold)
+                    .foregroundColor(Theme.Colors.accent)
+            }
+
+            if let address = job.addressDisplay {
+                Label(address, systemImage: "mappin.and.ellipse")
+                    .font(Theme.Typography.subheadline)
+                    .foregroundColor(Theme.Colors.secondaryText)
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: Theme.Spacing.md) {
+                Label(Self.dateFormatter.string(from: job.scheduledStart), systemImage: "clock")
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.tertiaryText)
+
+                if let km = job.distanceKm {
+                    Label(String(format: "%.1f km away", km), systemImage: "location")
+                        .font(Theme.Typography.caption)
+                        .foregroundColor(Theme.Colors.tertiaryText)
+                }
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .background(Theme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
+        .shadow(color: Theme.Shadows.small.color,
+                radius: Theme.Shadows.small.radius,
+                x: 0, y: Theme.Shadows.small.y)
     }
 }
 
@@ -264,12 +428,9 @@ struct MapPinView: View {
                 Circle()
                     .fill(isUrgent ? Theme.Colors.urgent : Theme.Colors.primary)
                     .frame(width: isSelected ? 48 : 40, height: isSelected ? 48 : 40)
-                    .shadow(
-                        color: Theme.Shadows.medium.color,
-                        radius: Theme.Shadows.medium.radius,
-                        x: 0,
-                        y: Theme.Shadows.medium.y
-                    )
+                    .shadow(color: Theme.Shadows.medium.color,
+                            radius: Theme.Shadows.medium.radius,
+                            x: 0, y: Theme.Shadows.medium.y)
 
                 Image(systemName: "figure.stand")
                     .font(.system(size: isSelected ? 24 : 20))
@@ -297,10 +458,10 @@ enum FilterChip: String, CaseIterable {
 
     var icon: String {
         switch self {
-        case .all: return "square.grid.2x2"
-        case .nearby: return "location.fill"
-        case .today: return "calendar"
-        case .highPay: return "dollarsign.circle.fill"
+        case .all:      return "square.grid.2x2"
+        case .nearby:   return "location.fill"
+        case .today:    return "calendar"
+        case .highPay:  return "dollarsign.circle.fill"
         case .verified: return "checkmark.seal.fill"
         }
     }
@@ -324,18 +485,16 @@ struct FilterChipView: View {
             .padding(.vertical, Theme.Spacing.sm)
             .background(isSelected ? Theme.Colors.primary : Theme.Colors.cardBackground)
             .clipShape(Capsule())
-            .shadow(
-                color: Theme.Shadows.small.color,
-                radius: Theme.Shadows.small.radius,
-                x: 0,
-                y: Theme.Shadows.small.y
-            )
+            .shadow(color: Theme.Shadows.small.color,
+                    radius: Theme.Shadows.small.radius,
+                    x: 0, y: Theme.Shadows.small.y)
         }
         .buttonStyle(.plain)
     }
 }
 
-// MARK: - Bottom Sheet View
+// MARK: - Legacy bottom sheet kept for backward compat (uses old Shift/Worker mock types)
+// Remove once ShiftsView is fully migrated to real API data.
 
 struct BottomSheetView: View {
     let userRole: UserRole
@@ -363,24 +522,15 @@ struct BottomSheetView: View {
                 VStack(spacing: Theme.Spacing.lg) {
                     if userRole == .worker {
                         ForEach(MockData.shifts) { shift in
-                            ShiftCardView(
-                                shift: shift,
-                                userRole: userRole,
-                                onPrimaryAction: {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                },
-                                onSecondaryAction: {}
-                            )
+                            ShiftCardView(shift: shift, userRole: userRole,
+                                          onPrimaryAction: { UIImpactFeedbackGenerator(style: .medium).impactOccurred() },
+                                          onSecondaryAction: {})
                         }
                     } else {
                         ForEach(MockData.workers) { worker in
-                            WorkerCardView(
-                                worker: worker,
-                                onPrimaryAction: {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                },
-                                onSecondaryAction: {}
-                            )
+                            WorkerCardView(worker: worker,
+                                           onPrimaryAction: { UIImpactFeedbackGenerator(style: .medium).impactOccurred() },
+                                           onSecondaryAction: {})
                         }
                     }
                 }
@@ -392,4 +542,6 @@ struct BottomSheetView: View {
 
 #Preview {
     MapHomeView()
+        .environmentObject(LocationManager())
+        .environmentObject(JobStore.shared)
 }

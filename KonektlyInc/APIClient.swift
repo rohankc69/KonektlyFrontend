@@ -300,8 +300,18 @@ actor APIClient {
             throw AppError.rateLimited(retryAfter: retryAfter)
         }
 
-        // Conflict (409) - profile already verified / non-editable
+        // Conflict (409) — could be a job-specific code or legacy profile conflict
         if httpResponse.statusCode == 409 {
+            if let envelope = try? decoder.decode(APIResponse<EmptyResponse>.self, from: data),
+               let errorPayload = envelope.error {
+                let code = APIErrorCode(rawValue: errorPayload.code) ?? .unknown
+                switch code {
+                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed:
+                    throw AppError.apiError(code: code, message: errorPayload.message)
+                default:
+                    throw AppError.conflict(message: errorPayload.message)
+                }
+            }
             let msg = parseErrorMessage(data: data) ?? "This profile is already verified and cannot be changed."
             throw AppError.conflict(message: msg)
         }
@@ -357,6 +367,16 @@ actor APIClient {
             throw AppError.rateLimited(retryAfter: retryAfter)
         }
         if statusCode == 409 {
+            if let envelope = try? decoder.decode(APIResponse<EmptyResponse>.self, from: data),
+               let errorPayload = envelope.error {
+                let code = APIErrorCode(rawValue: errorPayload.code) ?? .unknown
+                switch code {
+                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed:
+                    throw AppError.apiError(code: code, message: errorPayload.message)
+                default:
+                    throw AppError.conflict(message: errorPayload.message)
+                }
+            }
             let msg = parseErrorMessage(data: data) ?? "This profile is already verified and cannot be changed."
             throw AppError.conflict(message: msg)
         }
@@ -572,4 +592,52 @@ extension Endpoint {
     }
 
     static let photoDelete = Endpoint(path: "/api/v1/auth/profile/photo/", method: .delete)
+
+    // MARK: - Jobs Endpoints
+
+    /// POST /api/v1/jobs/ — Business: post a new open job
+    static func postJob(_ req: PostJobRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// GET /api/v1/jobs/nearby/?lat=&lng=&radius=
+    static func nearbyJobs(lat: Double?, lng: Double?, postalCode: String? = nil, radius: Int? = nil) -> Endpoint {
+        var items: [URLQueryItem] = []
+        if let lat = lat { items.append(URLQueryItem(name: "lat", value: "\(lat)")) }
+        if let lng = lng { items.append(URLQueryItem(name: "lng", value: "\(lng)")) }
+        if let pc = postalCode { items.append(URLQueryItem(name: "postal_code", value: pc)) }
+        if let r = radius { items.append(URLQueryItem(name: "radius", value: "\(r)")) }
+        return Endpoint(path: "/api/v1/jobs/nearby/", method: .get, queryItems: items.isEmpty ? nil : items)
+    }
+
+    /// GET /api/v1/jobs/{jobId}/workers/?radius=
+    static func workersNearJob(jobId: Int, radius: Int? = nil) -> Endpoint {
+        var items: [URLQueryItem] = []
+        if let r = radius { items.append(URLQueryItem(name: "radius", value: "\(r)")) }
+        return Endpoint(path: "/api/v1/jobs/\(jobId)/workers/", method: .get, queryItems: items.isEmpty ? nil : items)
+    }
+
+    /// POST /api/v1/jobs/{jobId}/apply/
+    static func applyForJob(jobId: Int, coverNote: String?) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/\(jobId)/apply/", method: .post,
+                 body: AnyEncodable(ApplyForJobRequest(coverNote: coverNote)))
+    }
+
+    /// GET /api/v1/jobs/{jobId}/applications/
+    static func jobApplications(jobId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/\(jobId)/applications/", method: .get)
+    }
+
+    /// GET /api/v1/my/applications/ — worker's own applications
+    /// Pass status to filter: "pending", "accepted", or "rejected". Nil fetches all.
+    static func myApplications(status: String? = nil) -> Endpoint {
+        var path = "/api/v1/my/applications/"
+        if let status { path += "?status=\(status)" }
+        return Endpoint(path: path, method: .get)
+    }
+
+    /// POST /api/v1/jobs/{jobId}/hire/{applicationId}/
+    static func hireWorker(jobId: Int, applicationId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/\(jobId)/hire/\(applicationId)/", method: .post)
+    }
 }

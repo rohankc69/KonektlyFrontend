@@ -331,6 +331,8 @@ final class AuthStore: ObservableObject {
         profileStatus = nil
         accessTier = nil
         clearError()
+        // Clear all jobs/applications state
+        JobStore.shared.clearAll()
     }
 
     // MARK: - Helpers
