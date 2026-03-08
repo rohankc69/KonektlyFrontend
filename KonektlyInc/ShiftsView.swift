@@ -12,6 +12,7 @@ struct ShiftsView: View {
     @AppStorage("userRole") private var userRoleRaw: String = UserRole.worker.rawValue
     @State private var selectedTab = 0
     @State private var searchText = ""
+    @State private var showLocationBanner = false   // non-blocking "enable GPS" hint
 
     @EnvironmentObject private var jobStore: JobStore
     @EnvironmentObject private var locationManager: LocationManager
@@ -121,25 +122,82 @@ struct ShiftsView: View {
                     }
                 }
             }
-            .task {
-                // Tab 0 data — re-use cached if already loaded
-                if jobStore.nearbyJobs.isEmpty && !jobStore.isLoadingNearbyJobs {
-                    locationManager.requestAuthorization()
-                    if let coord = await locationManager.currentCoordinate() {
-                        await jobStore.fetchNearbyJobs(lat: coord.latitude, lng: coord.longitude)
+            // Non-blocking GPS banner — shown once when permission denied
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if showLocationBanner {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "location.slash.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Theme.Colors.primaryText)
+                        Text("Enable location to see how far jobs are from you")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                        Spacer()
+                        Button {
+                            withAnimation { showLocationBanner = false }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.Colors.tertiaryText)
+                        }
                     }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.tertiaryBackground)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                // Worker: pre-fetch applications so tabs 1 & 2 are ready
+            }
+            .task {
+                locationManager.requestAuthorization()
+                let coord = await locationManager.currentCoordinate()
+
+                // Show banner once if GPS denied — never block the list
+                if coord == nil && locationManager.authStatus == .denied {
+                    withAnimation { showLocationBanner = true }
+                }
+
+                // Tab 0: nearby jobs with GPS if available
+                if jobStore.nearbyJobs.isEmpty && !jobStore.isLoadingNearbyJobs {
+                    await jobStore.fetchNearbyJobs(
+                        lat: coord?.latitude,
+                        lng: coord?.longitude
+                    )
+                }
+
+                // Worker: pre-fetch applications with GPS for distance badges
                 if userRole == .worker &&
                    jobStore.activeApplications.isEmpty &&
                    !jobStore.isLoadingMyApplications {
-                    await jobStore.fetchMyApplications()
+                    await jobStore.fetchMyApplications(
+                        lat: coord?.latitude,
+                        lng: coord?.longitude
+                    )
                 }
             }
             // Refresh applications when switching to worker tabs 1 or 2
             .onChange(of: selectedTab) { _, tab in
                 if userRole == .worker && (tab == 1 || tab == 2) {
-                    Task { await jobStore.fetchMyApplications() }
+                    Task {
+                        let coord = await locationManager.currentCoordinate()
+                        await jobStore.fetchMyApplications(
+                            lat: coord?.latitude,
+                            lng: coord?.longitude
+                        )
+                    }
+                }
+            }
+            // When a new application is inserted (after apply), switch to Applied tab
+            // and do a background server sync to get the real server-assigned timestamps
+            .onChange(of: jobStore.activeApplications.count) { oldCount, newCount in
+                guard userRole == .worker, newCount > oldCount else { return }
+                withAnimation { selectedTab = 1 }
+                // Background sync — replace optimistic insert with real server data
+                Task {
+                    let coord = await locationManager.currentCoordinate()
+                    await jobStore.fetchMyApplications(
+                        lat: coord?.latitude,
+                        lng: coord?.longitude
+                    )
                 }
             }
         }
@@ -184,7 +242,10 @@ struct ShiftsView: View {
             loadingView("Loading applications…")
         } else if let error = jobStore.myApplicationsError {
             errorView(error.errorDescription ?? "Failed to load applications") {
-                Task { await jobStore.fetchMyApplications() }
+                Task {
+                    let coord = await locationManager.currentCoordinate()
+                    await jobStore.fetchMyApplications(lat: coord?.latitude, lng: coord?.longitude)
+                }
             }
         } else if appliedApplications.isEmpty {
             emptyView("tray",
@@ -277,6 +338,18 @@ struct ShiftsView: View {
     }
 }
 
+// MARK: - Distance Badge (shared by all cards)
+// Spec: null → hide, < 1000m → "800 m", ≥ 1000m → "2.3 km"
+
+private struct DistanceBadge: View {
+    let formatted: String
+    var body: some View {
+        Label(formatted, systemImage: "mappin.and.ellipse")
+            .font(Theme.Typography.caption)
+            .foregroundColor(Theme.Colors.secondaryText)
+    }
+}
+
 // MARK: - Nearby Job List Card (worker tab 0)
 
 struct NearbyJobListCard: View {
@@ -295,27 +368,40 @@ struct NearbyJobListCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Label(address, systemImage: "mappin.and.ellipse")
+                        Text(address)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                             .lineLimit(1)
                     }
                 }
                 Spacer()
+                // Pay rate chip — accent colour per spec
                 Text("$\(job.payRate)/hr")
-                    .font(Theme.Typography.headlineSemibold)
+                    .font(Theme.Typography.caption.weight(.semibold))
                     .foregroundColor(Theme.Colors.accent)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(Theme.Colors.accent.opacity(0.12))
+                    .clipShape(Capsule())
             }
 
             HStack(spacing: Theme.Spacing.md) {
                 Label(Self.df.string(from: job.scheduledStart), systemImage: "clock")
                     .font(Theme.Typography.caption)
                     .foregroundColor(Theme.Colors.tertiaryText)
-                if let km = job.distanceKm {
-                    Label(String(format: "%.1f km", km), systemImage: "location")
-                        .font(Theme.Typography.caption)
-                        .foregroundColor(Theme.Colors.tertiaryText)
+                // Distance badge — hidden if null (GPS denied or not sent)
+                if let dist = job.formattedDistance {
+                    DistanceBadge(formatted: dist)
                 }
+                Spacer()
+                // Status chip — open → green, filled → grey
+                Text(job.status.capitalized)
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundColor(job.statusEnum == .open ? .green : Theme.Colors.tertiaryText)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 3)
+                    .background((job.statusEnum == .open ? Color.green : Theme.Colors.tertiaryText).opacity(0.12))
+                    .clipShape(Capsule())
             }
 
             Button {
@@ -383,7 +469,7 @@ struct PostedJobListCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Label(address, systemImage: "mappin.and.ellipse")
+                        Text(address)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                             .lineLimit(1)
@@ -392,8 +478,12 @@ struct PostedJobListCard: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
                     Text("$\(job.payRate)/hr")
-                        .font(Theme.Typography.headlineSemibold)
+                        .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(Theme.Colors.accent)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(Theme.Colors.accent.opacity(0.12))
+                        .clipShape(Capsule())
                     Text(job.status.capitalized)
                         .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(statusColor)
@@ -403,9 +493,14 @@ struct PostedJobListCard: View {
                         .clipShape(Capsule())
                 }
             }
-            Label(Self.df.string(from: job.scheduledStart), systemImage: "clock")
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.tertiaryText)
+            HStack(spacing: Theme.Spacing.md) {
+                Label(Self.df.string(from: job.scheduledStart), systemImage: "clock")
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.tertiaryText)
+                if let dist = job.formattedDistance {
+                    DistanceBadge(formatted: dist)
+                }
+            }
         }
         .padding(Theme.Spacing.lg)
         .background(Theme.Colors.cardBackground)
@@ -448,7 +543,7 @@ struct MyApplicationCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = item.job.addressDisplay {
-                        Label(address, systemImage: "mappin.and.ellipse")
+                        Text(address)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                             .lineLimit(1)
@@ -456,13 +551,23 @@ struct MyApplicationCard: View {
                 }
                 Spacer()
                 Text("$\(item.job.payRate)/hr")
-                    .font(Theme.Typography.headlineSemibold)
+                    .font(Theme.Typography.caption.weight(.semibold))
                     .foregroundColor(Theme.Colors.accent)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(Theme.Colors.accent.opacity(0.12))
+                    .clipShape(Capsule())
             }
 
-            Label(Self.df.string(from: item.job.scheduledStart), systemImage: "clock")
-                .font(Theme.Typography.caption)
-                .foregroundColor(Theme.Colors.tertiaryText)
+            HStack(spacing: Theme.Spacing.md) {
+                Label(Self.df.string(from: item.job.scheduledStart), systemImage: "clock")
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.tertiaryText)
+                // Distance badge — hidden if null per spec
+                if let dist = item.job.formattedDistance {
+                    DistanceBadge(formatted: dist)
+                }
+            }
 
             // Application status badge
             HStack(spacing: Theme.Spacing.xs) {
@@ -499,7 +604,7 @@ struct CompletedWorkerCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = item.job.addressDisplay {
-                        Label(address, systemImage: "mappin.and.ellipse")
+                        Text(address)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                             .lineLimit(1)
@@ -507,21 +612,29 @@ struct CompletedWorkerCard: View {
                 }
                 Spacer()
                 Text("$\(item.job.payRate)/hr")
-                    .font(Theme.Typography.headlineSemibold)
+                    .font(Theme.Typography.caption.weight(.semibold))
                     .foregroundColor(Theme.Colors.accent)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(Theme.Colors.accent.opacity(0.12))
+                    .clipShape(Capsule())
             }
 
             HStack(spacing: Theme.Spacing.md) {
                 Label(Self.df.string(from: item.job.scheduledStart), systemImage: "clock")
                     .font(Theme.Typography.caption)
                     .foregroundColor(Theme.Colors.tertiaryText)
+                // Distance badge — hidden if null per spec
+                if let dist = item.job.formattedDistance {
+                    DistanceBadge(formatted: dist)
+                }
                 Spacer()
                 HStack(spacing: Theme.Spacing.xs) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(Theme.Colors.success)
                         .font(.system(size: Theme.Sizes.iconSmall))
                     Text("Completed")
-                        .font(Theme.Typography.subheadline.weight(.medium))
+                        .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(Theme.Colors.success)
                 }
             }
@@ -559,17 +672,30 @@ struct CompletedBusinessCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Label(address, systemImage: "mappin.and.ellipse")
+                        Text(address)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                             .lineLimit(1)
                     }
                 }
                 Spacer()
+                // Show earnings if calculable, otherwise fall back to pay rate chip
                 if let paid = earnings {
                     Text(paid)
-                        .font(Theme.Typography.headlineSemibold)
+                        .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(Theme.Colors.accent)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(Theme.Colors.accent.opacity(0.12))
+                        .clipShape(Capsule())
+                } else {
+                    Text("$\(job.payRate)/hr")
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .foregroundColor(Theme.Colors.accent)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(Theme.Colors.accent.opacity(0.12))
+                        .clipShape(Capsule())
                 }
             }
 
@@ -577,13 +703,16 @@ struct CompletedBusinessCard: View {
                 Label(Self.df.string(from: job.scheduledStart), systemImage: "clock")
                     .font(Theme.Typography.caption)
                     .foregroundColor(Theme.Colors.tertiaryText)
+                if let dist = job.formattedDistance {
+                    DistanceBadge(formatted: dist)
+                }
                 Spacer()
                 HStack(spacing: Theme.Spacing.xs) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(Theme.Colors.success)
                         .font(.system(size: Theme.Sizes.iconSmall))
                     Text("Completed")
-                        .font(Theme.Typography.subheadline.weight(.medium))
+                        .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(Theme.Colors.success)
                 }
             }

@@ -243,13 +243,39 @@ final class JobStore: ObservableObject {
             let response: ApplyForJobResponse = try await APIClient.shared.request(
                 .applyForJob(jobId: jobId, coverNote: coverNote))
             lastSubmittedApplication = response.application
-            appliedJobIds.insert(jobId)                          // ← immediate, session-scoped
+            appliedJobIds.insert(jobId)
+
+            // Immediately synthesize a MyApplicationItem so the Applied tab
+            // updates without needing a separate network round-trip.
+            // We build it from the job we already have in nearbyJobs.
+            if let sourceJob = nearbyJobs.first(where: { $0.id == jobId }) {
+                let embeddedJob = MyApplicationJob(
+                    id: sourceJob.id,
+                    title: sourceJob.title,
+                    status: sourceJob.status,
+                    payRate: sourceJob.payRate,
+                    scheduledStart: sourceJob.scheduledStart,
+                    addressDisplay: sourceJob.addressDisplay,
+                    distanceKm: sourceJob.distanceKm,
+                    distanceM: sourceJob.distanceM
+                )
+                let item = MyApplicationItem(
+                    id: response.application.id,
+                    status: ApplicationStatus.pending.rawValue,
+                    coverNote: coverNote,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    job: embeddedJob
+                )
+                // Insert at top — most recent first
+                activeApplications.insert(item, at: 0)
+            }
+
             print("[JOBS] applyForJob: application id=\(response.application.id) status=\(response.application.status)")
             return response.application
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             applyError = storeError
-            // If the backend says already applied, record it so the button stays disabled
             if storeError == .alreadyApplied { appliedJobIds.insert(jobId) }
             print("[JOBS] applyForJob error: \(storeError.errorDescription ?? "")")
             return nil
@@ -258,32 +284,30 @@ final class JobStore: ObservableObject {
 
     // MARK: - Worker: Fetch My Applications
 
-    /// Fetches the worker's applications using the ?status= filter the backend supports.
+    /// Fetches the worker's applications. Pass lat/lng for distance badges on each card.
     /// Makes two requests in parallel:
     ///   1. ?status=pending  → pending apps  (Applied tab)
-    ///   2. ?status=accepted → accepted apps (both tabs — Completed filtered client-side by job.status)
-    /// The rejected tab is intentionally omitted — rejected apps aren't shown per UX decision.
-    func fetchMyApplications() async {
+    ///   2. ?status=accepted → accepted apps (both tabs — Completed filtered by job.status)
+    func fetchMyApplications(lat: Double? = nil, lng: Double? = nil) async {
         guard !isLoadingMyApplications else { return }
         isLoadingMyApplications = true
         myApplicationsError = nil
         defer { isLoadingMyApplications = false }
 
         do {
-            // Fetch pending and accepted in parallel
-            async let pendingResponse: MyApplicationsResponse  = APIClient.shared.request(.myApplications(status: "pending"))
-            async let acceptedResponse: MyApplicationsResponse = APIClient.shared.request(.myApplications(status: "accepted"))
+            async let pendingResponse: MyApplicationsResponse  = APIClient.shared.request(
+                .myApplications(status: "pending",  lat: lat, lng: lng))
+            async let acceptedResponse: MyApplicationsResponse = APIClient.shared.request(
+                .myApplications(status: "accepted", lat: lat, lng: lng))
 
             let (pending, accepted) = try await (pendingResponse, acceptedResponse)
 
-            // Applied tab: pending first (most recent updated_at), then accepted-but-not-completed
             let acceptedActive = accepted.applications.filter {
                 $0.job.jobStatusEnum != .completed
             }
             activeApplications = (pending.applications + acceptedActive)
                 .sorted { $0.updatedAt > $1.updatedAt }
 
-            // Completed tab: accepted where the job itself is completed
             completedApplications = accepted.applications
                 .filter { $0.job.jobStatusEnum == .completed }
                 .sorted { $0.updatedAt > $1.updatedAt }

@@ -577,9 +577,25 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
     let scheduledStart: Date
     let scheduledEnd: Date?
     let distanceKm: Double?
+    let distanceM: Double?
     let createdAt: Date
 
     var statusEnum: JobStatus { JobStatus(rawValue: status) ?? .open }
+
+    /// Formatted distance badge per spec:
+    /// null  → nil (hide badge entirely)
+    /// < 1000 m → "800 m"
+    /// ≥ 1000 m → "2.3 km"
+    var formattedDistance: String? {
+        guard let m = distanceM else {
+            // Fall back to distanceKm if only km is present (legacy)
+            guard let km = distanceKm else { return nil }
+            return String(format: "%.1f km", km)
+        }
+        if m < 1000 { return "\(Int(m.rounded())) m" }
+        guard let km = distanceKm else { return String(format: "%.1f km", m / 1000) }
+        return String(format: "%.1f km", km)
+    }
 
     /// Returns a copy of this job with a different status (used for local state mutations).
     func withStatus(_ newStatus: JobStatus) -> APIJob {
@@ -587,7 +603,7 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
             id: id, clientId: clientId, title: title, description: description,
             addressDisplay: addressDisplay, status: newStatus.rawValue, payRate: payRate,
             scheduledStart: scheduledStart, scheduledEnd: scheduledEnd,
-            distanceKm: distanceKm, createdAt: createdAt
+            distanceKm: distanceKm, distanceM: distanceM, createdAt: createdAt
         )
     }
 
@@ -600,6 +616,7 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
         case scheduledStart = "scheduled_start"
         case scheduledEnd = "scheduled_end"
         case distanceKm = "distance_km"
+        case distanceM  = "distance_m"
         case createdAt = "created_at"
     }
 }
@@ -759,14 +776,19 @@ nonisolated struct HireWorkerResponse: Decodable, Sendable {
 // NOTE: distance_km is always null here — only populated on nearby search results.
 
 nonisolated struct MyApplicationItem: Decodable, Sendable, Identifiable, Equatable {
-    let id: Int                     // application id
-    let status: String              // "pending" | "accepted" | "rejected"
+    let id: Int
+    let status: String
     let coverNote: String?
     let createdAt: Date
     let updatedAt: Date
     let job: MyApplicationJob
 
     var statusEnum: ApplicationStatus { ApplicationStatus(rawValue: status) ?? .pending }
+
+    init(id: Int, status: String, coverNote: String?, createdAt: Date, updatedAt: Date, job: MyApplicationJob) {
+        self.id = id; self.status = status; self.coverNote = coverNote
+        self.createdAt = createdAt; self.updatedAt = updatedAt; self.job = job
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, status
@@ -782,18 +804,40 @@ nonisolated struct MyApplicationItem: Decodable, Sendable, Identifiable, Equatab
 nonisolated struct MyApplicationJob: Decodable, Sendable, Equatable {
     let id: Int
     let title: String
-    let status: String              // job status: "open" | "filled" | "cancelled" | "completed"
+    let status: String
     let payRate: String
     let scheduledStart: Date
     let addressDisplay: String?
+    let distanceKm: Double?
+    let distanceM: Double?
 
     var jobStatusEnum: JobStatus { JobStatus(rawValue: status) ?? .open }
+
+    var formattedDistance: String? {
+        guard let m = distanceM else {
+            guard let km = distanceKm else { return nil }
+            return String(format: "%.1f km", km)
+        }
+        if m < 1000 { return "\(Int(m.rounded())) m" }
+        guard let km = distanceKm else { return String(format: "%.1f km", m / 1000) }
+        return String(format: "%.1f km", km)
+    }
+
+    init(id: Int, title: String, status: String, payRate: String,
+         scheduledStart: Date, addressDisplay: String?,
+         distanceKm: Double?, distanceM: Double?) {
+        self.id = id; self.title = title; self.status = status; self.payRate = payRate
+        self.scheduledStart = scheduledStart; self.addressDisplay = addressDisplay
+        self.distanceKm = distanceKm; self.distanceM = distanceM
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, title, status
         case payRate        = "pay_rate"
         case scheduledStart = "scheduled_start"
         case addressDisplay = "address_display"
+        case distanceKm     = "distance_km"
+        case distanceM      = "distance_m"
     }
 }
 

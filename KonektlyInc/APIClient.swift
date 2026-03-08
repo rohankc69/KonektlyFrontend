@@ -633,11 +633,13 @@ extension Endpoint {
         Endpoint(path: "/api/v1/jobs/\(jobId)/applications/", method: .get)
     }
 
-    /// GET /api/v1/my/applications/?status= — worker's own applications
-    /// Pass status to filter: "pending", "accepted", or "rejected". Nil fetches all.
-    static func myApplications(status: String? = nil) -> Endpoint {
+    /// GET /api/v1/my/applications/?status=&lat=&lng= — worker's own applications
+    /// Pass lat+lng to receive distance_km and distance_m on each embedded job.
+    static func myApplications(status: String? = nil, lat: Double? = nil, lng: Double? = nil) -> Endpoint {
         var items: [URLQueryItem] = []
         if let status { items.append(URLQueryItem(name: "status", value: status)) }
+        if let lat    { items.append(URLQueryItem(name: "lat",    value: String(format: "%.6f", lat))) }
+        if let lng    { items.append(URLQueryItem(name: "lng",    value: String(format: "%.6f", lng))) }
         return Endpoint(
             path: "/api/v1/my/applications/",
             method: .get,
