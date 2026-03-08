@@ -333,13 +333,6 @@ struct NearbyJobListCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
             }
             .disabled(applyButtonDisabled)
-
-            if let applyError = jobStore.applyError,
-               jobStore.lastSubmittedApplication != nil {
-                Text(applyError.errorDescription ?? "")
-                    .font(Theme.Typography.caption)
-                    .foregroundColor(Theme.Colors.error)
-            }
         }
         .padding(Theme.Spacing.lg)
         .background(Theme.Colors.cardBackground)
@@ -349,7 +342,7 @@ struct NearbyJobListCard: View {
     }
 
     private var alreadyApplied: Bool {
-        jobStore.applyError == .alreadyApplied
+        jobStore.hasApplied(jobId: job.id)
     }
     private var jobFilled: Bool {
         job.statusEnum == .filled || job.statusEnum == .cancelled

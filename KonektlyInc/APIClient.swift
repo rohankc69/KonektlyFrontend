@@ -628,12 +628,16 @@ extension Endpoint {
         Endpoint(path: "/api/v1/jobs/\(jobId)/applications/", method: .get)
     }
 
-    /// GET /api/v1/my/applications/ — worker's own applications
+    /// GET /api/v1/my/applications/?status= — worker's own applications
     /// Pass status to filter: "pending", "accepted", or "rejected". Nil fetches all.
     static func myApplications(status: String? = nil) -> Endpoint {
-        var path = "/api/v1/my/applications/"
-        if let status { path += "?status=\(status)" }
-        return Endpoint(path: path, method: .get)
+        var items: [URLQueryItem] = []
+        if let status { items.append(URLQueryItem(name: "status", value: status)) }
+        return Endpoint(
+            path: "/api/v1/my/applications/",
+            method: .get,
+            queryItems: items.isEmpty ? nil : items
+        )
     }
 
     /// POST /api/v1/jobs/{jobId}/hire/{applicationId}/

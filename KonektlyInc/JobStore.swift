@@ -97,6 +97,9 @@ final class JobStore: ObservableObject {
     @Published private(set) var isLoadingMyApplications = false
     @Published private(set) var myApplicationsError: JobStoreError? = nil
 
+    /// Worker: set of jobIds applied this session (immediate, before /my/applications/ is fetched)
+    @Published private(set) var appliedJobIds: Set<Int> = []
+
     /// Business: hire state
     @Published private(set) var isHiring = false
     @Published private(set) var hireError: JobStoreError? = nil
@@ -240,11 +243,14 @@ final class JobStore: ObservableObject {
             let response: ApplyForJobResponse = try await APIClient.shared.request(
                 .applyForJob(jobId: jobId, coverNote: coverNote))
             lastSubmittedApplication = response.application
+            appliedJobIds.insert(jobId)                          // ← immediate, session-scoped
             print("[JOBS] applyForJob: application id=\(response.application.id) status=\(response.application.status)")
             return response.application
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             applyError = storeError
+            // If the backend says already applied, record it so the button stays disabled
+            if storeError == .alreadyApplied { appliedJobIds.insert(jobId) }
             print("[JOBS] applyForJob error: \(storeError.errorDescription ?? "")")
             return nil
         }
@@ -341,6 +347,7 @@ final class JobStore: ObservableObject {
 
     /// Clear all job-related state (e.g. on sign-out).
     func clearAll() {
+        appliedJobIds = []
         nearbyJobs = []
         postedJobs = []
         applications = []
@@ -357,9 +364,14 @@ final class JobStore: ObservableObject {
         myApplicationsError = nil
     }
 
-    /// Whether the worker has already applied for a given job
-    /// (based on `lastSubmittedApplication` — local only until a My Applications endpoint exists).
+    /// Whether the worker has already applied for a given job.
+    /// Three sources checked in priority order:
+    ///   1. `appliedJobIds` — populated immediately on a successful apply this session
+    ///   2. `activeApplications` — fetched from /my/applications/?status=pending|accepted
+    ///   3. `completedApplications` — fetched from /my/applications/?status=accepted (completed jobs)
     func hasApplied(jobId: Int) -> Bool {
-        lastSubmittedApplication?.workerId != nil  // placeholder — extend when /my/applications/ lands
+        appliedJobIds.contains(jobId)
+            || activeApplications.contains { $0.job.id == jobId }
+            || completedApplications.contains { $0.job.id == jobId }
     }
 }
