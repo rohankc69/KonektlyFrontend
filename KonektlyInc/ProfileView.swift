@@ -11,15 +11,15 @@ struct ProfileView: View {
     @AppStorage("userRole") private var userRoleRaw: String = UserRole.worker.rawValue
     @State private var isAvailable = true
     @State private var showSettings = false
+    @State private var showTerms = false
     
     private var userRole: UserRole {
         UserRole(rawValue: userRoleRaw) ?? .worker
     }
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: Theme.Spacing.xl) {
+        ScrollView {
+            VStack(spacing: Theme.Spacing.xl) {
                     // Profile Header
                     VStack(spacing: Theme.Spacing.lg) {
                         // Avatar
@@ -192,7 +192,12 @@ struct ProfileView: View {
                         
                         SettingsRow(icon: "questionmark.circle.fill", title: "Help & Support", showChevron: true) {}
                         Divider().padding(.leading, 52)
-                        
+
+                        SettingsRow(icon: "doc.text.fill", title: "Terms & Conditions", showChevron: true) {
+                            showTerms = true
+                        }
+                        Divider().padding(.leading, 52)
+
                         SettingsRow(icon: "gearshape.fill", title: "Settings", showChevron: true) {}
                     }
                     .cardStyle()
@@ -226,9 +231,11 @@ struct ProfileView: View {
                     }
                 }
             }
-        }
+            .navigationDestination(isPresented: $showTerms) {
+                TermsReadView()
+            }
     }
-    
+
     private func logout() {
         // Reset onboarding state
         UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")

@@ -251,14 +251,13 @@ final class AuthStore: ObservableObject {
 
     // MARK: - Terms Accept (Step 6)
 
-    func acceptTerms() async throws {
+    /// Accept the terms using the version string returned by GET /api/v1/legal/terms/.
+    /// The caller (TermsAcceptView) must fetch the live document first and pass its version here.
+    func acceptTerms(version: String) async throws {
         isLoading = true
         defer { isLoading = false }
         clearError()
-        let today = ISO8601DateFormatter.string(
-            from: Date(), timeZone: .current, formatOptions: [.withFullDate]
-        )
-        let req = TermsAcceptRequest(accepted: true, termsVersion: today)
+        let req = TermsAcceptRequest(accepted: true, termsVersion: version)
         let _: TermsAcceptResponse = try await APIClient.shared.request(.acceptTerms(req))
         await loadCurrentUser()
     }

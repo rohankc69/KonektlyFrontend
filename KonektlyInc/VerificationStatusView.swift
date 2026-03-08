@@ -17,9 +17,10 @@ struct VerificationStatusView: View {
     @State private var showDeleteConfirm = false
     @State private var showPhotoOptions = false
     @State private var showPhotoPicker = false
+    @State private var showPhotoPreview = false
     @State private var pendingImage: UIImage?
     @State private var pendingImageData: Data?
-    @State private var showPhotoPreview = false
+    @State private var showTerms = false
 
     private var user: AuthUser? { authStore.currentUser }
     private var status: ProfileStatus? { authStore.profileStatus }
@@ -54,6 +55,9 @@ struct VerificationStatusView: View {
             }
             .background(Theme.Colors.background)
             .refreshable { await refresh() }
+            .navigationDestination(isPresented: $showTerms) {
+                TermsReadView()
+            }
             .overlay(alignment: .top) {
                 // Photo upload error/success banner
                 if case .error(let msg) = photoUploader.state {
@@ -308,10 +312,12 @@ struct VerificationStatusView: View {
             menuDivider
 
             ProfileMenuItem(
-                icon: "lock.fill",
-                title: "Privacy",
+                icon: "doc.text.fill",
+                title: "Terms & Conditions",
                 subtitle: nil
-            ) {}
+            ) {
+                showTerms = true
+            }
             menuDivider
 
             ProfileMenuItem(

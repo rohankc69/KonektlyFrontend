@@ -399,8 +399,27 @@ nonisolated struct DOBUpdateResponse: Decodable, Sendable {
     let message: String?
 }
 
+// MARK: - Terms Document (GET /api/v1/legal/terms/)
+// Fetched before showing TermsAcceptView — version from this response MUST be sent in the accept call.
+// No authentication required.
+
+nonisolated struct TermsDocument: Decodable, Sendable {
+    let id: Int
+    let version: String       // e.g. "1.0" — pass this to POST /auth/terms/accept/
+    let title: String
+    let content: String
+    let effectiveDate: String // "YYYY-MM-DD" display string
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id, version, title, content
+        case effectiveDate = "effective_date"
+        case createdAt     = "created_at"
+    }
+}
+
 // MARK: - Terms Accept (Step 6 of onboarding)
-// POST /auth/terms/accept/
+// POST /api/v1/auth/terms/accept/
 
 nonisolated struct TermsAcceptRequest: Encodable, Sendable {
     let accepted: Bool

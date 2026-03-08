@@ -577,6 +577,11 @@ extension Endpoint {
                  body: AnyEncodable(req))
     }
 
+    /// GET /api/v1/legal/terms/ — fetch live terms document (no auth required)
+    /// Always call this before showing TermsAcceptView.
+    /// The version returned MUST be forwarded to POST /auth/terms/accept/.
+    static let currentTerms = Endpoint(path: "/api/v1/legal/terms/", method: .get)
+
     static let profileStatus = Endpoint(path: "/api/v1/profiles/status/", method: .get)
     static let accessTier = Endpoint(path: "/api/v1/access-tier/", method: .get)
 
