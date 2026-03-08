@@ -845,3 +845,7 @@ nonisolated struct MyApplicationsResponse: Decodable, Sendable {
     let count: Int
     let applications: [MyApplicationItem]
 }
+
+/// Used for endpoints that return a 200 with no meaningful data body (e.g. complete job).
+/// Named distinctly from APIClient's internal EmptyResponse to avoid shadowing.
+nonisolated struct VoidAPIResponse: Decodable, Sendable {}

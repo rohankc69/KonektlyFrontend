@@ -13,6 +13,8 @@ import Combine
 enum JobStoreError: LocalizedError, Equatable {
     case alreadyApplied
     case jobNotOpen
+    case jobNotFilled
+    case jobAlreadyCompleted
     case applicationAlreadyProcessed
     case permissionDenied
     case locationRequired
@@ -24,6 +26,8 @@ enum JobStoreError: LocalizedError, Equatable {
         switch self {
         case .alreadyApplied:                return "You have already applied for this job."
         case .jobNotOpen:                    return "This job is no longer accepting applications."
+        case .jobNotFilled:                  return "Hire a worker before marking complete."
+        case .jobAlreadyCompleted:           return "This job is already completed."
         case .applicationAlreadyProcessed:  return "This application has already been processed."
         case .permissionDenied:             return "You don't have permission to perform this action."
         case .locationRequired:             return "Allow location access or enter your postal code."
@@ -33,7 +37,6 @@ enum JobStoreError: LocalizedError, Equatable {
         }
     }
 
-    // Map APIErrorCode to a typed JobStoreError
     static func from(_ appError: AppError) -> JobStoreError {
         if case .apiError(let code, let message) = appError {
             switch code {
@@ -44,7 +47,11 @@ enum JobStoreError: LocalizedError, Equatable {
             case .locationRequired:              return .locationRequired
             case .geocodeFailed:                 return .geocodeFailed
             case .notFound:                      return .notFound
-            default:                             return .general(message)
+            default:
+                // Map 409 JOB_NOT_FILLED / JOB_ALREADY_COMPLETED by message content
+                if message.lowercased().contains("not filled") { return .jobNotFilled }
+                if message.lowercased().contains("already completed") { return .jobAlreadyCompleted }
+                return .general(message)
             }
         }
         return .general(appError.errorDescription ?? "An unexpected error occurred.")
@@ -68,8 +75,10 @@ final class JobStore: ObservableObject {
     @Published private(set) var isLoadingNearbyJobs = false
     @Published private(set) var nearbyJobsError: JobStoreError? = nil
 
-    /// Business: my posted jobs (populated from post + future list endpoint)
+    /// Business: my posted jobs (populated from post + fetchPostedJobs)
     @Published private(set) var postedJobs: [APIJob] = []
+    @Published private(set) var isLoadingPostedJobs = false
+    @Published private(set) var postedJobsError: JobStoreError? = nil
     @Published private(set) var isPostingJob = false
     @Published private(set) var postJobError: JobStoreError? = nil
 
@@ -104,6 +113,10 @@ final class JobStore: ObservableObject {
     @Published private(set) var isHiring = false
     @Published private(set) var hireError: JobStoreError? = nil
 
+    /// Business: complete job state
+    @Published private(set) var isCompleting = false
+    @Published private(set) var completeError: JobStoreError? = nil
+
     // MARK: - Worker: Fetch Nearby Jobs
 
     /// Fetch open jobs near the given GPS coordinates.
@@ -112,11 +125,13 @@ final class JobStore: ObservableObject {
     ///   - lng: Device longitude (preferred).
     ///   - postalCode: Fallback when GPS is unavailable.
     ///   - radius: Search radius in km (default 10, max 250).
+    ///   - forceRefresh: Bypass the isLoading guard and clear stale errors (use from .refreshable).
     func fetchNearbyJobs(lat: Double? = nil, lng: Double? = nil,
-                         postalCode: String? = nil, radius: Int? = nil) async {
-        guard !isLoadingNearbyJobs else { return }
+                         postalCode: String? = nil, radius: Int? = nil,
+                         forceRefresh: Bool = false) async {
+        guard !isLoadingNearbyJobs || forceRefresh else { return }
         isLoadingNearbyJobs = true
-        nearbyJobsError = nil
+        nearbyJobsError = nil           // always clear error so stale message disappears
         defer { isLoadingNearbyJobs = false }
 
         do {
@@ -129,6 +144,33 @@ final class JobStore: ObservableObject {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             nearbyJobsError = storeError
             print("[JOBS] fetchNearbyJobs error: \(storeError.errorDescription ?? "")")
+        }
+    }
+
+    // MARK: - Business: Fetch Posted Jobs
+
+    /// Load all jobs posted by this business (GET /api/v1/jobs/mine/).
+    /// Merges server results with any jobs posted this session so nothing is lost.
+    /// - Parameter forceRefresh: Bypass isLoading guard — use from .refreshable.
+    func fetchPostedJobs(forceRefresh: Bool = false) async {
+        guard !isLoadingPostedJobs || forceRefresh else { return }
+        isLoadingPostedJobs = true
+        postedJobsError = nil           // always clear stale error on refresh
+        defer { isLoadingPostedJobs = false }
+
+        do {
+            let response: NearbyJobsResponse = try await APIClient.shared.request(.myPostedJobs())
+            // Merge: server is source of truth, but keep any session-posted jobs
+            // that the server might not return yet (race condition on very fast posts)
+            let serverIds = Set(response.jobs.map { $0.id })
+            let sessionOnly = postedJobs.filter { !serverIds.contains($0.id) }
+            postedJobs = (sessionOnly + response.jobs)
+                .sorted { $0.scheduledStart > $1.scheduledStart }
+            print("[JOBS] fetchPostedJobs: \(response.count) jobs loaded")
+        } catch {
+            let storeError = JobStoreError.from(error as? AppError ?? .unknown)
+            postedJobsError = storeError
+            print("[JOBS] fetchPostedJobs error: \(storeError.errorDescription ?? "")")
         }
     }
 
@@ -186,6 +228,7 @@ final class JobStore: ObservableObject {
     // MARK: - Business: List Applicants
 
     /// Load all applications for the given job (business only).
+    /// Writes to the shared `applications` array — use `fetchApplicationsForCard` from list cards.
     func fetchApplications(jobId: Int) async {
         guard !isLoadingApplications else { return }
         isLoadingApplications = true
@@ -200,6 +243,20 @@ final class JobStore: ObservableObject {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             applicationsError = storeError
             print("[JOBS] fetchApplications error: \(storeError.errorDescription ?? "")")
+        }
+    }
+
+    /// Card-scoped variant — returns the applications directly so each PostedJobListCard
+    /// maintains its own isolated list instead of reading the shared global array.
+    /// This prevents Card B from briefly showing Card A's applicants during concurrent expands.
+    func fetchApplicationsForCard(jobId: Int) async -> [JobApplication] {
+        do {
+            let response: JobApplicationsResponse = try await APIClient.shared.request(.jobApplications(jobId: jobId))
+            print("[JOBS] fetchApplicationsForCard: \(response.count) for jobId=\(jobId)")
+            return response.applications
+        } catch {
+            print("[JOBS] fetchApplicationsForCard error for jobId=\(jobId): \(error)")
+            return []
         }
     }
 
@@ -285,13 +342,12 @@ final class JobStore: ObservableObject {
     // MARK: - Worker: Fetch My Applications
 
     /// Fetches the worker's applications. Pass lat/lng for distance badges on each card.
-    /// Makes two requests in parallel:
-    ///   1. ?status=pending  → pending apps  (Applied tab)
-    ///   2. ?status=accepted → accepted apps (both tabs — Completed filtered by job.status)
-    func fetchMyApplications(lat: Double? = nil, lng: Double? = nil) async {
-        guard !isLoadingMyApplications else { return }
+    /// - Parameter forceRefresh: Bypass isLoading guard — use from .refreshable.
+    func fetchMyApplications(lat: Double? = nil, lng: Double? = nil,
+                              forceRefresh: Bool = false) async {
+        guard !isLoadingMyApplications || forceRefresh else { return }
         isLoadingMyApplications = true
-        myApplicationsError = nil
+        myApplicationsError = nil       // always clear stale error on refresh
         defer { isLoadingMyApplications = false }
 
         do {
@@ -367,6 +423,38 @@ final class JobStore: ObservableObject {
         }
     }
 
+    // MARK: - Business: Mark Job Complete
+
+    /// POST /api/v1/jobs/{jobId}/complete/ — transitions a filled job → completed.
+    /// On success, updates job status locally so the UI transitions instantly.
+    @discardableResult
+    func markJobComplete(jobId: Int) async -> Bool {
+        guard !isCompleting else { return false }
+        isCompleting = true
+        completeError = nil
+        defer { isCompleting = false }
+
+        do {
+            // No response body needed — just confirm 200
+            let _: VoidAPIResponse = try await APIClient.shared.request(.completeJob(jobId: jobId))
+            // Transition job locally: filled → completed
+            postedJobs = postedJobs.map { job in
+                job.id == jobId ? job.withStatus(.completed) : job
+            }
+            print("[JOBS] markJobComplete: jobId=\(jobId) → completed")
+            return true
+        } catch {
+            let storeError = JobStoreError.from(error as? AppError ?? .unknown)
+            completeError = storeError
+            // If already completed, refresh to sync server state
+            if storeError == .jobAlreadyCompleted {
+                await fetchPostedJobs(forceRefresh: true)
+            }
+            print("[JOBS] markJobComplete error: \(storeError.errorDescription ?? "")")
+            return false
+        }
+    }
+
     // MARK: - Helpers
 
     /// Clear all job-related state (e.g. on sign-out).
@@ -380,11 +468,13 @@ final class JobStore: ObservableObject {
         completedApplications = []
         lastSubmittedApplication = nil
         nearbyJobsError = nil
+        postedJobsError = nil
         postJobError = nil
         applicationsError = nil
         nearbyWorkersError = nil
         applyError = nil
         hireError = nil
+        completeError = nil
         myApplicationsError = nil
     }
 

@@ -464,6 +464,25 @@ struct PostJobView: View {
         if !fieldErrors.isEmpty { isSubmitting = false; return }
 
         Task {
+            // If GPS coordinates are available, reverse-geocode to get a human-readable
+            // address string. This prevents address_display showing raw coordinates
+            // like "49.895100, -97.138400" everywhere in the app.
+            var resolvedAddress: String? = trimAddress.isEmpty ? nil : trimAddress
+            if let lat = resolvedLat, let lng = resolvedLng, resolvedAddress == nil {
+                let geocoder = CLGeocoder()
+                let location = CLLocation(latitude: lat, longitude: lng)
+                if let placemarks = try? await geocoder.reverseGeocodeLocation(location),
+                   let place = placemarks.first {
+                    let parts: [String?] = [
+                        place.subThoroughfare,   // street number
+                        place.thoroughfare,       // street name
+                        place.locality,           // city
+                        place.administrativeArea  // province/state
+                    ]
+                    resolvedAddress = parts.compactMap { $0 }.joined(separator: ", ")
+                }
+            }
+
             let result = await jobStore.postJob(
                 title: trimTitle,
                 description: description.trimmingCharacters(in: .whitespaces).isEmpty
@@ -473,7 +492,7 @@ struct PostJobView: View {
                 scheduledEnd: hasEndTime ? scheduledEnd : nil,
                 lat: resolvedLat,
                 lng: resolvedLng,
-                address: resolvedLat == nil ? trimAddress : nil
+                address: resolvedAddress
             )
             if result != nil {
                 withAnimation { showSuccessBanner = true }

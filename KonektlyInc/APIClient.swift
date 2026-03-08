@@ -459,8 +459,12 @@ actor APIClient {
     private func decodeResponse<T: Decodable>(data: Data, statusCode: Int) throws -> T {
         do {
             let envelope = try decoder.decode(APIResponse<T>.self, from: data)
-            if envelope.success, let result = envelope.data {
-                return result
+            if envelope.success {
+                // Happy path: data field present
+                if let result = envelope.data { return result }
+                // Void endpoints return {"success":true,"message":"..."} with no data field.
+                // If T is VoidAPIResponse we can construct a value with no data.
+                if let void = VoidAPIResponse() as? T { return void }
             }
             // Map error payload to AppError
             if let errorPayload = envelope.error {
@@ -605,6 +609,19 @@ extension Endpoint {
         Endpoint(path: "/api/v1/jobs/", method: .post, body: AnyEncodable(req))
     }
 
+    /// GET /api/v1/jobs/mine/ — Business: list all jobs posted by this business
+    /// Returns the same JobObject shape as nearby jobs.
+    /// Optional ?status= filter: "open" | "filled" | "cancelled" | "completed"
+    static func myPostedJobs(status: String? = nil) -> Endpoint {
+        var items: [URLQueryItem] = []
+        if let status { items.append(URLQueryItem(name: "status", value: status)) }
+        return Endpoint(
+            path: "/api/v1/jobs/mine/",
+            method: .get,
+            queryItems: items.isEmpty ? nil : items
+        )
+    }
+
     /// GET /api/v1/jobs/nearby/?lat=&lng=&radius=
     static func nearbyJobs(lat: Double?, lng: Double?, postalCode: String? = nil, radius: Int? = nil) -> Endpoint {
         var items: [URLQueryItem] = []
@@ -650,5 +667,11 @@ extension Endpoint {
     /// POST /api/v1/jobs/{jobId}/hire/{applicationId}/
     static func hireWorker(jobId: Int, applicationId: Int) -> Endpoint {
         Endpoint(path: "/api/v1/jobs/\(jobId)/hire/\(applicationId)/", method: .post)
+    }
+
+    /// POST /api/v1/jobs/{jobId}/complete/ — Business: mark a filled job as completed
+    /// No request body. Job must be in "filled" status.
+    static func completeJob(jobId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/\(jobId)/complete/", method: .post)
     }
 }

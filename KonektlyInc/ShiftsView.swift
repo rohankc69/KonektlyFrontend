@@ -156,22 +156,42 @@ struct ShiftsView: View {
                     withAnimation { showLocationBanner = true }
                 }
 
-                // Tab 0: nearby jobs with GPS if available
-                if jobStore.nearbyJobs.isEmpty && !jobStore.isLoadingNearbyJobs {
-                    await jobStore.fetchNearbyJobs(
-                        lat: coord?.latitude,
-                        lng: coord?.longitude
-                    )
+                // Tab 0: nearby jobs (worker) OR posted jobs (business)
+                if userRole == .worker {
+                    if jobStore.nearbyJobs.isEmpty && !jobStore.isLoadingNearbyJobs {
+                        await jobStore.fetchNearbyJobs(lat: coord?.latitude, lng: coord?.longitude)
+                    }
+                    // Pre-fetch applications so tabs 1 & 2 are ready
+                    if jobStore.activeApplications.isEmpty && !jobStore.isLoadingMyApplications {
+                        await jobStore.fetchMyApplications(lat: coord?.latitude, lng: coord?.longitude)
+                    }
+                } else {
+                    // Business: always refresh posted jobs on view load
+                    await jobStore.fetchPostedJobs()
                 }
-
-                // Worker: pre-fetch applications with GPS for distance badges
-                if userRole == .worker &&
-                   jobStore.activeApplications.isEmpty &&
-                   !jobStore.isLoadingMyApplications {
-                    await jobStore.fetchMyApplications(
-                        lat: coord?.latitude,
-                        lng: coord?.longitude
-                    )
+            }
+            .refreshable {
+                let coord = await locationManager.currentCoordinate()
+                if userRole == .worker {
+                    // Run both fetches truly in parallel and wait for both to complete
+                    // forceRefresh: true bypasses isLoading guard so a guard from
+                    // a concurrent .task never blocks the pull-to-refresh
+                    await withTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            await jobStore.fetchNearbyJobs(
+                                lat: coord?.latitude, lng: coord?.longitude,
+                                forceRefresh: true
+                            )
+                        }
+                        group.addTask {
+                            await jobStore.fetchMyApplications(
+                                lat: coord?.latitude, lng: coord?.longitude,
+                                forceRefresh: true
+                            )
+                        }
+                    }
+                } else {
+                    await jobStore.fetchPostedJobs(forceRefresh: true)
                 }
             }
             // Refresh applications when switching to worker tabs 1 or 2
@@ -207,27 +227,35 @@ struct ShiftsView: View {
 
     @ViewBuilder
     private var availableTab: some View {
-        if jobStore.isLoadingNearbyJobs {
-            loadingView("Loading jobs…")
-        } else if let error = jobStore.nearbyJobsError {
-            errorView(error.errorDescription ?? "Failed to load jobs") {
-                Task {
-                    if let coord = await locationManager.currentCoordinate() {
-                        await jobStore.fetchNearbyJobs(lat: coord.latitude, lng: coord.longitude)
+        if userRole == .worker {
+            if jobStore.isLoadingNearbyJobs {
+                loadingView("Loading jobs…")
+            } else if let error = jobStore.nearbyJobsError {
+                errorView(error.errorDescription ?? "Failed to load jobs") {
+                    Task {
+                        let coord = await locationManager.currentCoordinate()
+                        await jobStore.fetchNearbyJobs(lat: coord?.latitude, lng: coord?.longitude)
                     }
                 }
-            }
-        } else if userRole == .worker {
-            if filteredNearbyJobs.isEmpty {
+            } else if filteredNearbyJobs.isEmpty {
                 emptyView("briefcase",
                           searchText.isEmpty ? "No jobs nearby right now" : "No results for \"\(searchText)\"")
             } else {
                 ForEach(filteredNearbyJobs) { job in NearbyJobListCard(job: job) }
             }
         } else {
-            // Business
-            if openPostedJobs.isEmpty {
-                emptyView("plus.square.dashed", "No open jobs — tap Post a Job to get started")
+            // Business — open jobs
+            if jobStore.isLoadingPostedJobs {
+                loadingView("Loading jobs…")
+            } else if let error = jobStore.postedJobsError {
+                errorView(error.errorDescription ?? "Failed to load jobs") {
+                    Task { await jobStore.fetchPostedJobs() }
+                }
+            } else if openPostedJobs.isEmpty {
+                emptyView("plus.square.dashed",
+                          searchText.isEmpty
+                            ? "No open jobs — tap Post a Job to get started"
+                            : "No results for \"\(searchText)\"")
             } else {
                 ForEach(openPostedJobs) { job in PostedJobListCard(job: job) }
             }
@@ -261,7 +289,13 @@ struct ShiftsView: View {
 
     @ViewBuilder
     private var activeTab: some View {
-        if activePostedJobs.isEmpty {
+        if jobStore.isLoadingPostedJobs {
+            loadingView("Loading active shifts…")
+        } else if let error = jobStore.postedJobsError {
+            errorView(error.errorDescription ?? "Failed to load shifts") {
+                Task { await jobStore.fetchPostedJobs() }
+            }
+        } else if activePostedJobs.isEmpty {
             emptyView("person.badge.clock", "No active shifts yet — hire a worker to see them here")
         } else {
             ForEach(activePostedJobs) { job in PostedJobListCard(job: job) }
@@ -375,13 +409,13 @@ struct NearbyJobListCard: View {
                     }
                 }
                 Spacer()
-                // Pay rate chip — accent colour per spec
+                // Pay rate chip — primaryText (black/white) per theme
                 Text("$\(job.payRate)/hr")
                     .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundColor(Theme.Colors.accent)
+                    .foregroundColor(Theme.Colors.primaryText)
                     .padding(.horizontal, Theme.Spacing.sm)
                     .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.12))
+                    .background(Theme.Colors.primaryText.opacity(0.08))
                     .clipShape(Capsule())
             }
 
@@ -394,13 +428,14 @@ struct NearbyJobListCard: View {
                     DistanceBadge(formatted: dist)
                 }
                 Spacer()
-                // Status chip — open → green, filled → grey
+                // Status chip — open → muted green, others → neutral secondaryText
+                let isOpen = job.statusEnum == .open
                 Text(job.status.capitalized)
                     .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundColor(job.statusEnum == .open ? .green : Theme.Colors.tertiaryText)
+                    .foregroundColor(isOpen ? Theme.Colors.success : Theme.Colors.secondaryText)
                     .padding(.horizontal, Theme.Spacing.sm)
                     .padding(.vertical, 3)
-                    .background((job.statusEnum == .open ? Color.green : Theme.Colors.tertiaryText).opacity(0.12))
+                    .background((isOpen ? Theme.Colors.success : Theme.Colors.secondaryText).opacity(0.10))
                     .clipShape(Capsule())
             }
 
@@ -447,6 +482,12 @@ struct NearbyJobListCard: View {
 
 struct PostedJobListCard: View {
     let job: APIJob
+    @EnvironmentObject private var jobStore: JobStore
+    @State private var isExpanded = false
+    @State private var localApplications: [JobApplication] = []
+    @State private var isLoadingApplicants = false
+    @State private var applicantsLoaded = false
+    @State private var showCompleteError: String? = nil
 
     private static let df: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
@@ -454,15 +495,17 @@ struct PostedJobListCard: View {
 
     private var statusColor: Color {
         switch job.statusEnum {
-        case .open:      return .green
-        case .filled:    return Theme.Colors.accent
+        case .open:      return Theme.Colors.success
+        case .filled:    return Theme.Colors.primaryText
         case .cancelled: return Theme.Colors.error
-        case .completed: return Theme.Colors.tertiaryText
+        case .completed: return Theme.Colors.secondaryText
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+
+            // Top row — title + pay chip + status chip
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text(job.title)
@@ -479,20 +522,22 @@ struct PostedJobListCard: View {
                 VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
                     Text("$\(job.payRate)/hr")
                         .font(Theme.Typography.caption.weight(.semibold))
-                        .foregroundColor(Theme.Colors.accent)
+                        .foregroundColor(Theme.Colors.primaryText)
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, 4)
-                        .background(Theme.Colors.accent.opacity(0.12))
+                        .background(Theme.Colors.primaryText.opacity(0.08))
                         .clipShape(Capsule())
                     Text(job.status.capitalized)
                         .font(Theme.Typography.caption.weight(.semibold))
                         .foregroundColor(statusColor)
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, 3)
-                        .background(statusColor.opacity(0.12))
+                        .background(statusColor.opacity(0.10))
                         .clipShape(Capsule())
                 }
             }
+
+            // Second row — clock + distance
             HStack(spacing: Theme.Spacing.md) {
                 Label(Self.df.string(from: job.scheduledStart), systemImage: "clock")
                     .font(Theme.Typography.caption)
@@ -501,12 +546,222 @@ struct PostedJobListCard: View {
                     DistanceBadge(formatted: dist)
                 }
             }
+
+            // "Mark as Complete" — only on filled jobs (shift scheduled, worker hired)
+            if job.statusEnum == .filled {
+                Button {
+                    showCompleteError = nil
+                    Task {
+                        let success = await jobStore.markJobComplete(jobId: job.id)
+                        if !success {
+                            showCompleteError = jobStore.completeError?.errorDescription
+                                ?? "Could not mark job complete. Please try again."
+                        }
+                    }
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        if jobStore.isCompleting {
+                            ProgressView().tint(.white).scaleEffect(0.85)
+                        } else {
+                            Image(systemName: "checkmark.circle")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Mark as Complete")
+                                .font(Theme.Typography.subheadline.weight(.semibold))
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(jobStore.isCompleting
+                                ? Theme.Colors.primaryText.opacity(0.4)
+                                : Theme.Colors.primaryText)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                }
+                .buttonStyle(.plain)
+                .disabled(jobStore.isCompleting)
+
+                if let errMsg = showCompleteError {
+                    Text(errMsg)
+                        .font(Theme.Typography.caption)
+                        .foregroundColor(Theme.Colors.error)
+                        .padding(.top, Theme.Spacing.xs)
+                }
+            }
+
+            // View applicants button — open jobs only
+            if job.statusEnum == .open {
+                Button {
+                    let willExpand = !isExpanded
+                    withAnimation(.easeInOut(duration: 0.25)) { isExpanded.toggle() }
+                    if willExpand && !applicantsLoaded {
+                        Task { await loadApplicants() }
+                    }
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(isExpanded ? "Hide Applicants" : "View Applicants")
+                            .font(Theme.Typography.caption.weight(.semibold))
+                        if !localApplications.isEmpty {
+                            Text("(\(localApplications.count))")
+                                .font(Theme.Typography.caption)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                        }
+                        Spacer()
+                        if isLoadingApplicants {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    .foregroundColor(Theme.Colors.primaryText)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.tertiaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                }
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    if isLoadingApplicants {
+                        ProgressView("Loading applicants…")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Theme.Spacing.sm)
+                    } else if localApplications.isEmpty {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            Image(systemName: "tray")
+                                .foregroundColor(Theme.Colors.tertiaryText)
+                            Text("No applications yet")
+                                .font(Theme.Typography.caption)
+                                .foregroundColor(Theme.Colors.tertiaryText)
+                        }
+                        .padding(.vertical, Theme.Spacing.sm)
+                    } else {
+                        VStack(spacing: Theme.Spacing.sm) {
+                            ForEach(localApplications) { app in
+                                ApplicantRow(
+                                    application: app,
+                                    jobId: job.id,
+                                    onHired: { hired in
+                                        localApplications = localApplications.map { a in
+                                            if a.id == hired.id { return hired }
+                                            if a.status == ApplicationStatus.pending.rawValue {
+                                                return a.withStatus(.rejected)
+                                            }
+                                            return a
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
         .padding(Theme.Spacing.lg)
         .background(Theme.Colors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
         .shadow(color: Theme.Shadows.small.color,
                 radius: Theme.Shadows.small.radius, x: 0, y: Theme.Shadows.small.y)
+    }
+
+    private func loadApplicants() async {
+        guard !isLoadingApplicants else { return }
+        isLoadingApplicants = true
+        defer { isLoadingApplicants = false }
+        localApplications = await jobStore.fetchApplicationsForCard(jobId: job.id)
+        applicantsLoaded = true
+    }
+}
+
+// MARK: - Applicant Row (inside PostedJobListCard)
+
+struct ApplicantRow: View {
+    let application: JobApplication
+    let jobId: Int
+    var onHired: ((JobApplication) -> Void)? = nil
+    @EnvironmentObject private var jobStore: JobStore
+
+    private var statusColor: Color {
+        switch ApplicationStatus(rawValue: application.status) ?? .pending {
+        case .pending:  return .orange
+        case .accepted: return Theme.Colors.success
+        case .rejected: return Theme.Colors.tertiaryText
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            // Avatar initials
+            ZStack {
+                Circle()
+                    .fill(Theme.Colors.tertiaryBackground)
+                    .frame(width: 36, height: 36)
+                Text(initials)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.Colors.primaryText)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(application.firstName) \(application.lastName)")
+                    .font(Theme.Typography.subheadline.weight(.medium))
+                    .foregroundColor(Theme.Colors.primaryText)
+                if let note = application.coverNote, !note.isEmpty {
+                    Text(note)
+                        .font(Theme.Typography.caption)
+                        .foregroundColor(Theme.Colors.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            // Status or Hire button
+            if application.status == ApplicationStatus.pending.rawValue {
+                Button {
+                    Task {
+                        if let hired = await jobStore.hireWorker(
+                            jobId: jobId,
+                            applicationId: application.id
+                        ) {
+                            onHired?(hired)
+                        }
+                    }
+                } label: {
+                    if jobStore.isHiring {
+                        ProgressView().scaleEffect(0.7)
+                    } else {
+                        Text("Hire")
+                            .font(Theme.Typography.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .padding(.vertical, 6)
+                            .background(Theme.Colors.primaryText)
+                            .clipShape(Capsule())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(jobStore.isHiring)
+            } else {
+                Text(application.status.capitalized)
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundColor(statusColor)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(statusColor.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+        }
+        .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    private var initials: String {
+        let f = application.firstName.prefix(1)
+        let l = application.lastName.prefix(1)
+        return "\(f)\(l)".uppercased()
     }
 }
 
@@ -550,12 +805,13 @@ struct MyApplicationCard: View {
                     }
                 }
                 Spacer()
+                // Pay rate chip — primaryText (black/white)
                 Text("$\(item.job.payRate)/hr")
                     .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundColor(Theme.Colors.accent)
+                    .foregroundColor(Theme.Colors.primaryText)
                     .padding(.horizontal, Theme.Spacing.sm)
                     .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.12))
+                    .background(Theme.Colors.primaryText.opacity(0.08))
                     .clipShape(Capsule())
             }
 
@@ -611,12 +867,13 @@ struct CompletedWorkerCard: View {
                     }
                 }
                 Spacer()
+                // Pay rate chip — primaryText (black/white)
                 Text("$\(item.job.payRate)/hr")
                     .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundColor(Theme.Colors.accent)
+                    .foregroundColor(Theme.Colors.primaryText)
                     .padding(.horizontal, Theme.Spacing.sm)
                     .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.12))
+                    .background(Theme.Colors.primaryText.opacity(0.08))
                     .clipShape(Capsule())
             }
 
@@ -679,22 +936,21 @@ struct CompletedBusinessCard: View {
                     }
                 }
                 Spacer()
-                // Show earnings if calculable, otherwise fall back to pay rate chip
                 if let paid = earnings {
                     Text(paid)
                         .font(Theme.Typography.caption.weight(.semibold))
-                        .foregroundColor(Theme.Colors.accent)
+                        .foregroundColor(Theme.Colors.primaryText)
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, 4)
-                        .background(Theme.Colors.accent.opacity(0.12))
+                        .background(Theme.Colors.primaryText.opacity(0.08))
                         .clipShape(Capsule())
                 } else {
                     Text("$\(job.payRate)/hr")
                         .font(Theme.Typography.caption.weight(.semibold))
-                        .foregroundColor(Theme.Colors.accent)
+                        .foregroundColor(Theme.Colors.primaryText)
                         .padding(.horizontal, Theme.Spacing.sm)
                         .padding(.vertical, 4)
-                        .background(Theme.Colors.accent.opacity(0.12))
+                        .background(Theme.Colors.primaryText.opacity(0.08))
                         .clipShape(Capsule())
                 }
             }
