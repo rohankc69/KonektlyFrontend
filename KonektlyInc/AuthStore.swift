@@ -325,6 +325,13 @@ final class AuthStore: ObservableObject {
 
     func signOut() {
         stopVerificationPolling()
+
+        // Best-effort backend logout (blacklist refresh token). No UX changes:
+        // fire-and-forget; local token state is cleared immediately.
+        Task.detached {
+            await APIClient.shared.logout()
+        }
+
         TokenStore.shared.clearAll()
         authState = .unauthenticated
         profileStatus = nil

@@ -7,8 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA000001FIREBASE000001 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = BB000001FIREBASE000001 /* FirebaseAuth */; };
-		AA000002FIREBASE000002 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = BB000002FIREBASE000002 /* FirebaseCore */; };
+		762F52142F724B9000C941CC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 762F52132F724B9000C941CC /* FirebaseAuth */; };
+		762F52162F724B9000C941CC /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 762F52152F724B9000C941CC /* FirebaseCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,8 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA000001FIREBASE000001 /* FirebaseAuth in Frameworks */,
-				AA000002FIREBASE000002 /* FirebaseCore in Frameworks */,
+				762F52162F724B9000C941CC /* FirebaseCore in Frameworks */,
+				762F52142F724B9000C941CC /* FirebaseAuth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,12 +79,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		762F52122F724B9000C941CC /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		767C09DE2F4D43CB0061DF32 = {
 			isa = PBXGroup;
 			children = (
 				767C09E92F4D43CC0061DF32 /* KonektlyInc */,
 				767C09FC2F4D43D10061DF32 /* KonektlyIncTests */,
 				767C0A062F4D43D10061DF32 /* KonektlyIncUITests */,
+				762F52122F724B9000C941CC /* Frameworks */,
 				767C09E82F4D43CC0061DF32 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -119,8 +127,8 @@
 			);
 			name = KonektlyInc;
 			packageProductDependencies = (
-				BB000001FIREBASE000001 /* FirebaseAuth */,
-				BB000002FIREBASE000002 /* FirebaseCore */,
+				762F52132F724B9000C941CC /* FirebaseAuth */,
+				762F52152F724B9000C941CC /* FirebaseCore */,
 			);
 			productName = KonektlyInc;
 			productReference = 767C09E72F4D43CC0061DF32 /* KonektlyInc.app */;
@@ -205,7 +213,7 @@
 			mainGroup = 767C09DE2F4D43CB0061DF32;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				76FC3CCF2F53E2ED00C76E74 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 767C09E82F4D43CC0061DF32 /* Products */;
@@ -594,25 +602,25 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		76FC3CCF2F53E2ED00C76E74 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+		762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 12.10.0;
+				minimumVersion = 12.11.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		BB000001FIREBASE000001 /* FirebaseAuth */ = {
+		762F52132F724B9000C941CC /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 76FC3CCF2F53E2ED00C76E74 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			package = 762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAuth;
 		};
-		BB000002FIREBASE000002 /* FirebaseCore */ = {
+		762F52152F724B9000C941CC /* FirebaseCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 76FC3CCF2F53E2ED00C76E74 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			package = 762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
 		};
 /* End XCSwiftPackageProductDependency section */

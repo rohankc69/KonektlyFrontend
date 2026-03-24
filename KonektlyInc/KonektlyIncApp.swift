@@ -54,6 +54,8 @@ struct KonektlyIncApp: App {
     @StateObject private var authStore = AuthStore.shared
     @StateObject private var jobStore = JobStore.shared
     @StateObject private var locationManager = LocationManager()
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -61,8 +63,18 @@ struct KonektlyIncApp: App {
                 .environmentObject(authStore)
                 .environmentObject(jobStore)
                 .environmentObject(locationManager)
+                .environmentObject(subscriptionManager)
                 .task {
+                    // No UX change: make sure an access token is available if refresh exists.
+                    await APIClient.shared.bootstrapTokensIfNeeded()
                     await authStore.bootstrapIfNeeded()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase == .active {
+                        Task {
+                            await subscriptionManager.refreshSubscriptionStatus()
+                        }
+                    }
                 }
         }
     }

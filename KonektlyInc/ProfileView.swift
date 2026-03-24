@@ -12,6 +12,8 @@ struct ProfileView: View {
     @State private var isAvailable = true
     @State private var showSettings = false
     @State private var showTerms = false
+    @State private var showSubscription = false
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
     
     private var userRole: UserRole {
         UserRole(rawValue: userRoleRaw) ?? .worker
@@ -34,9 +36,17 @@ struct ProfileView: View {
                                 )
                                 .frame(width: Theme.Sizes.avatarExtraLarge, height: Theme.Sizes.avatarExtraLarge)
                             
-                            Image(systemName: MockData.currentUser.avatarName)
-                                .font(.system(size: 56))
-                                .foregroundColor(.white)
+                            HStack(spacing: Theme.Spacing.sm) {
+                                Image(systemName: "person.circle.fill")
+                                    .font(.system(size: 56))
+                                    .foregroundColor(.white)
+                                
+                                // Active subscription badge
+                                if subscriptionManager.isKonektlyPlus {
+                                    ActiveSubscriptionBadge()
+                                        .offset(y: 20)
+                                }
+                            }
                             
                             // Verified badge
                             if MockData.currentUser.isVerified {
@@ -100,6 +110,21 @@ struct ProfileView: View {
                         }
                     }
                     .padding(.top, Theme.Spacing.lg)
+                    
+                    // SUBSCRIPTION CARD - Shows for EVERYONE (manage or upgrade)
+                    if subscriptionManager.isKonektlyPlus {
+                        // Active subscription - show management card
+                        ActiveSubscriptionCard {
+                            showSubscription = true
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                    } else {
+                        // Not subscribed - show upgrade card
+                        UpgradeCard {
+                            showSubscription = true
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                    }
                     
                     // Availability Toggle (for workers)
                     if userRole == .worker {
@@ -181,6 +206,16 @@ struct ProfileView: View {
                         SettingsRow(icon: "person.fill", title: "Edit Profile", showChevron: true) {}
                         Divider().padding(.leading, 52)
                         
+                        // Subscription row - AVAILABLE FOR ALL USERS
+                        SettingsRow(
+                            icon: "star.circle.fill",
+                            title: subscriptionManager.isKonektlyPlus ? "Konektly+ Active" : "Upgrade to Konektly+",
+                            showChevron: true
+                        ) {
+                            showSubscription = true
+                        }
+                        Divider().padding(.leading, 52)
+                        
                         SettingsRow(icon: "bell.fill", title: "Notifications", showChevron: true) {}
                         Divider().padding(.leading, 52)
                         
@@ -233,6 +268,20 @@ struct ProfileView: View {
             }
             .navigationDestination(isPresented: $showTerms) {
                 TermsReadView()
+            }
+            .sheet(isPresented: $showSubscription) {
+                NavigationStack {
+                    SubscriptionView()
+                        .navigationTitle("Konektly+")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") {
+                                    showSubscription = false
+                                }
+                            }
+                        }
+                }
             }
     }
 

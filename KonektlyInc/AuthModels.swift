@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CoreLocation
 
 // MARK: - Generic API Response Envelope
 
@@ -579,8 +580,23 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
     let distanceKm: Double?
     let distanceM: Double?
     let createdAt: Date
+    
+    // MARK: - Location Privacy / Blurring Support
+    /// Optional coordinates for the job location (may be approximate if locationIsApproximate is true)
+    let lat: Double?
+    let lng: Double?
+    /// Indicates whether the coordinates are blurred/approximate for privacy
+    /// When true, lat/lng represent an approximate location (e.g., offset by 100-500m)
+    let locationIsApproximate: Bool?
 
     var statusEnum: JobStatus { JobStatus(rawValue: status) ?? .open }
+    
+    /// Returns the coordinate for map display.
+    /// If lat/lng are available, use them; otherwise returns nil.
+    var coordinate: CLLocationCoordinate2D? {
+        guard let lat = lat, let lng = lng else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
 
     /// Formatted distance badge per spec:
     /// null  → nil (hide badge entirely)
@@ -603,7 +619,8 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
             id: id, clientId: clientId, title: title, description: description,
             addressDisplay: addressDisplay, status: newStatus.rawValue, payRate: payRate,
             scheduledStart: scheduledStart, scheduledEnd: scheduledEnd,
-            distanceKm: distanceKm, distanceM: distanceM, createdAt: createdAt
+            distanceKm: distanceKm, distanceM: distanceM, createdAt: createdAt,
+            lat: lat, lng: lng, locationIsApproximate: locationIsApproximate
         )
     }
 
@@ -618,6 +635,8 @@ nonisolated struct APIJob: Decodable, Sendable, Identifiable, Equatable {
         case distanceKm = "distance_km"
         case distanceM  = "distance_m"
         case createdAt = "created_at"
+        case lat, lng
+        case locationIsApproximate = "location_is_approximate"
     }
 }
 

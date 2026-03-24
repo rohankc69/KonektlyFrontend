@@ -1,11 +1,11 @@
 # Konektly - On-Demand Staffing App
 
-## 📱 Project Overview
+## Project Overview
 A production-ready SwiftUI iOS app inspired by Uber's sleek interface, designed for connecting businesses with on-demand workers for short-term shifts. Built for iOS 26.2 with support for iPhone 17 Pro.
 
-## ✨ Features Implemented
+## Features Implemented
 
-### 🎯 Core Screens
+### Core Screens
 
 1. **Role Selection (Onboarding)**
    - Elegant animated onboarding flow
@@ -42,7 +42,7 @@ A production-ready SwiftUI iOS app inspired by Uber's sleek interface, designed 
    - Settings list with navigation
    - Logout functionality
 
-### 🎨 Design System (Theme.swift)
+### Design System (Theme.swift)
 
 - **Colors**: Uber-inspired black/white palette with green accent
 - **Typography**: SF Font throughout (largeTitle, headline, body, caption)
@@ -52,7 +52,7 @@ A production-ready SwiftUI iOS app inspired by Uber's sleek interface, designed 
 - **Button Styles**: Primary (filled) and Secondary (outlined)
 - **Card Style**: Rounded corners with shadow
 
-### 🧩 Reusable Components
+### Reusable Components
 
 - **ShiftCardView**: Displays shift details with role-specific CTAs
 - **WorkerCardView**: Shows worker profiles with availability status
@@ -64,7 +64,7 @@ A production-ready SwiftUI iOS app inspired by Uber's sleek interface, designed 
 - **StatView**: Profile statistics display
 - **SettingsRow**: List row with icon and chevron
 
-### 📊 Data Architecture
+### Data Architecture
 
 **Models.swift**
 - `User`: Role-based user with ratings, skills, verification
@@ -78,7 +78,7 @@ A production-ready SwiftUI iOS app inspired by Uber's sleek interface, designed 
 - Realistic mock conversations and messages
 - Current user profile
 
-### 🗺️ Navigation Structure
+### Navigation Structure
 
 ```
 TabView (AppRootView)
@@ -93,7 +93,7 @@ TabView (AppRootView)
     └── NavigationStack
 ```
 
-## 🎯 iOS Features Utilized
+## iOS Features Utilized
 
 - **SwiftUI Sheets**: `.presentationDetents([.height(120), .medium, .large])`
 - **MapKit**: Interactive map with custom annotations
@@ -104,7 +104,7 @@ TabView (AppRootView)
 - **SF Symbols**: Consistent iconography
 - **Dynamic Type**: Accessibility-ready typography
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 KonektlyInc/
@@ -123,13 +123,13 @@ KonektlyInc/
 └── KonektlyIncApp.swift      # App entry point
 ```
 
-## 🚀 Build Status
+## Build Status
 
-✅ **BUILD SUCCEEDED** on iPhone 17 Pro Simulator (iOS 26.2)
+**BUILD SUCCEEDED** on iPhone 17 Pro Simulator (iOS 26.2)
 
 All files compile without errors. The app is ready to run.
 
-## 🎨 Visual Design Highlights
+## Visual Design Highlights
 
 - **Uber-like Aesthetic**: Minimal black/white with strategic green accents
 - **Modern iOS**: Rounded cards, smooth shadows, native components
@@ -137,7 +137,7 @@ All files compile without errors. The app is ready to run.
 - **Animations**: Smooth transitions, spring animations, detent changes
 - **Touch Targets**: Minimum 44pt for accessibility compliance
 
-## 📝 Key Implementation Details
+## Key Implementation Details
 
 1. **No Backend**: All data is local/mock - perfect for UI prototyping
 2. **No Third-Party Libraries**: Pure SwiftUI + Apple frameworks
@@ -145,7 +145,7 @@ All files compile without errors. The app is ready to run.
 4. **Production-Ready Code**: Clean architecture, reusable components
 5. **Apple HIG Compliant**: Follows Human Interface Guidelines
 
-## 🎯 User Flows
+## User Flows
 
 ### Worker Flow
 1. Select "I'm a Worker" on onboarding
@@ -163,7 +163,7 @@ All files compile without errors. The app is ready to run.
 5. Chat with workers
 6. Post new jobs
 
-## 🔄 Next Steps (Future Enhancements)
+## Next Steps (Future Enhancements)
 
 - Location permissions and real user location
 - Backend integration for real-time data
@@ -176,4 +176,4 @@ All files compile without errors. The app is ready to run.
 
 ---
 
-**Built with ❤️ using SwiftUI for iOS 26.2**
+**Built with SwiftUI for iOS 26.2**

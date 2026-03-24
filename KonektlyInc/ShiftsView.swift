@@ -389,6 +389,8 @@ private struct DistanceBadge: View {
 struct NearbyJobListCard: View {
     let job: APIJob
     @EnvironmentObject private var jobStore: JobStore
+    @State private var showSubscription = false
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
 
     private static let df: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
@@ -402,10 +404,27 @@ struct NearbyJobListCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Text(address)
-                            .font(Theme.Typography.subheadline)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .lineLimit(1)
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Text(address)
+                                .font(Theme.Typography.subheadline)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                                .lineLimit(1)
+                            
+                            // Privacy indicator for approximate locations - tappable to upgrade
+                            if job.locationIsApproximate == true && !subscriptionManager.isKonektlyPlus {
+                                Button {
+                                    showSubscription = true
+                                } label: {
+                                    Image(systemName: "location.circle")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(Theme.Colors.accent)
+                                }
+                            } else if job.locationIsApproximate == true {
+                                Image(systemName: "location.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.Colors.tertiaryText)
+                            }
+                        }
                     }
                 }
                 Spacer()
@@ -438,6 +457,13 @@ struct NearbyJobListCard: View {
                     .background((isOpen ? Theme.Colors.success : Theme.Colors.secondaryText).opacity(0.10))
                     .clipShape(Capsule())
             }
+            
+            // Show upgrade prompt for approximate locations (only for non-subscribers)
+            if job.locationIsApproximate == true && !subscriptionManager.isKonektlyPlus {
+                LocationBlurPrompt {
+                    showSubscription = true
+                }
+            }
 
             Button {
                 Task { await jobStore.applyForJob(jobId: job.id) }
@@ -460,6 +486,20 @@ struct NearbyJobListCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
         .shadow(color: Theme.Shadows.small.color,
                 radius: Theme.Shadows.small.radius, x: 0, y: Theme.Shadows.small.y)
+        .sheet(isPresented: $showSubscription) {
+            NavigationStack {
+                SubscriptionView()
+                    .navigationTitle("Konektly+")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showSubscription = false
+                            }
+                        }
+                    }
+            }
+        }
     }
 
     private var alreadyApplied: Bool {
@@ -472,7 +512,7 @@ struct NearbyJobListCard: View {
         jobStore.isApplying || alreadyApplied || jobFilled
     }
     private var applyButtonTitle: String {
-        if alreadyApplied { return "Applied ✓" }
+        if alreadyApplied { return "Applied" }
         if jobFilled       { return "Position Filled" }
         return "Apply Now"
     }
@@ -512,10 +552,19 @@ struct PostedJobListCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Text(address)
-                            .font(Theme.Typography.subheadline)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .lineLimit(1)
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Text(address)
+                                .font(Theme.Typography.subheadline)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                                .lineLimit(1)
+                            
+                            // Privacy indicator for approximate locations
+                            if job.locationIsApproximate == true {
+                                Image(systemName: "location.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.Colors.tertiaryText)
+                            }
+                        }
                     }
                 }
                 Spacer()
@@ -777,7 +826,7 @@ struct MyApplicationCard: View {
     private var statusLabel: String {
         switch item.statusEnum {
         case .pending:  return "Pending"
-        case .accepted: return "Hired ✓"
+        case .accepted: return "Hired"
         case .rejected: return "Not selected"
         }
     }
@@ -929,10 +978,19 @@ struct CompletedBusinessCard: View {
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
                     if let address = job.addressDisplay {
-                        Text(address)
-                            .font(Theme.Typography.subheadline)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .lineLimit(1)
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Text(address)
+                                .font(Theme.Typography.subheadline)
+                                .foregroundColor(Theme.Colors.secondaryText)
+                                .lineLimit(1)
+                            
+                            // Privacy indicator for approximate locations
+                            if job.locationIsApproximate == true {
+                                Image(systemName: "location.circle")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.Colors.tertiaryText)
+                            }
+                        }
                     }
                 }
                 Spacer()

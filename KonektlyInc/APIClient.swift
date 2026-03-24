@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Security
 
 // MARK: - Token Store (Keychain-backed)
 
@@ -17,18 +18,24 @@ nonisolated final class TokenStore: @unchecked Sendable {
     private let accessKey = "konektly.access_token"
     private let refreshKey = "konektly.refresh_token"
 
+    /// Keep the access token in-memory by default (faster, avoids unnecessary Keychain IO).
+    /// It will still be re-hydrated from refresh token when needed.
+    private var inMemoryAccessToken: String?
+
     var accessToken: String? {
-        get { read(key: accessKey) }
-        set { newValue == nil ? delete(key: accessKey) : write(key: accessKey, value: newValue!) }
+        get { inMemoryAccessToken }
+        set { inMemoryAccessToken = newValue }
     }
 
+    /// Refresh token must be persisted securely.
     var refreshToken: String? {
         get { read(key: refreshKey) }
         set { newValue == nil ? delete(key: refreshKey) : write(key: refreshKey, value: newValue!) }
     }
 
     func clearAll() {
-        delete(key: accessKey)
+        inMemoryAccessToken = nil
+        delete(key: accessKey) // backwards-compat: clear if older builds persisted access
         delete(key: refreshKey)
     }
 
@@ -324,10 +331,15 @@ actor APIClient {
 
         // Unauthorised - try token refresh once
         if httpResponse.statusCode == 401 && authenticated && retryCount == 0 {
-            let newToken = try await refreshAccessToken()
-            var retryRequest = request
-            retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-            return try await execute(retryRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 1)
+            do {
+                let newToken = try await refreshAccessToken()
+                var retryRequest = request
+                retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                return try await execute(retryRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 1)
+            } catch {
+                // Refresh failed: tokens already cleared by refreshAccessToken().
+                throw AppError.unauthorized
+            }
         }
 
         return try decodeResponse(data: data, statusCode: httpResponse.statusCode)
@@ -385,10 +397,14 @@ actor APIClient {
             throw AppError.serviceUnavailable(message: msg)
         }
         if statusCode == 401 && authenticated && retryCount == 0 {
-            let newToken = try await refreshAccessToken()
-            var retryRequest = request
-            retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-            return try await executeWithStatus(retryRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 1)
+            do {
+                let newToken = try await refreshAccessToken()
+                var retryRequest = request
+                retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                return try await executeWithStatus(retryRequest, endpoint: endpoint, authenticated: authenticated, retryCount: 1)
+            } catch {
+                throw AppError.unauthorized
+            }
         }
 
         let decoded: T = try decodeResponse(data: data, statusCode: statusCode)
@@ -398,13 +414,11 @@ actor APIClient {
     // MARK: - Token Refresh
 
     private func refreshAccessToken() async throws -> String {
-        // TokenStore is @unchecked Sendable - safe to read from actor context.
         guard let refreshToken = TokenStore.shared.refreshToken else {
             throw AppError.unauthorized
         }
 
         if isRefreshing {
-            // Enqueue and wait for the in-flight refresh to complete.
             return try await withCheckedThrowingContinuation { continuation in
                 refreshContinuations.append(continuation)
             }
@@ -412,8 +426,17 @@ actor APIClient {
 
         isRefreshing = true
 
+        // Backend allows aliases: refresh_token, refreshToken, token.
+        // We send the canonical "refresh".
         struct RefreshRequest: Encodable, Sendable { let refresh: String }
-        struct RefreshResponse: Decodable, Sendable { let access: String }
+
+        struct RotatedTokensResponse: Decodable, Sendable {
+            struct TokenPair: Decodable, Sendable {
+                let access: String
+                let refresh: String
+            }
+            let tokens: TokenPair
+        }
 
         let endpoint = Endpoint(
             path: "/api/v1/auth/token/refresh/",
@@ -422,20 +445,19 @@ actor APIClient {
         )
 
         do {
-            let response: RefreshResponse = try await publicRequest(endpoint)
+            let response: RotatedTokensResponse = try await publicRequest(endpoint)
 
-            // Persist new access token - TokenStore is @unchecked Sendable.
-            TokenStore.shared.accessToken = response.access
+            // Rotation: persist new refresh and update in-memory access.
+            TokenStore.shared.accessToken = response.tokens.access
+            TokenStore.shared.refreshToken = response.tokens.refresh
 
-            // Unblock all waiting callers - resume() is synchronous, no await needed.
             let continuations = refreshContinuations
             refreshContinuations.removeAll()
             isRefreshing = false
-            for cont in continuations { cont.resume(returning: response.access) }
+            for cont in continuations { cont.resume(returning: response.tokens.access) }
 
-            return response.access
+            return response.tokens.access
         } catch {
-            // Clear tokens and reject all waiters on refresh failure.
             TokenStore.shared.clearAll()
             let continuations = refreshContinuations
             refreshContinuations.removeAll()
@@ -481,6 +503,63 @@ actor APIClient {
             }
             throw AppError.decoding(underlying: error)
         }
+    }
+
+    // MARK: - Bootstrap / Session Management
+
+    /// Best-effort token bootstrap.
+    /// Loads a fresh access token if we only have a refresh token (rotating refresh tokens supported).
+    /// No UX changes: failures are swallowed and will surface naturally on protected calls.
+    func bootstrapTokensIfNeeded() async {
+        // If we already have an access token in memory, nothing to do.
+        if TokenStore.shared.accessToken != nil { return }
+        // If we don't have refresh, nothing to do.
+        guard TokenStore.shared.refreshToken != nil else { return }
+        do {
+            _ = try await refreshAccessToken()
+        } catch {
+            print("[API] bootstrapTokensIfNeeded: refresh failed: \(error)")
+        }
+    }
+
+    /// Backend logout: blacklists the refresh token (idempotent). Always clears local tokens.
+    func logout() async {
+        guard let refreshToken = TokenStore.shared.refreshToken else {
+            TokenStore.shared.clearAll()
+            return
+        }
+
+        struct LogoutRequest: Encodable, Sendable { let refresh: String }
+        let endpoint = Endpoint(
+            path: "/api/v1/auth/logout/",
+            method: .post,
+            body: AnyEncodable(LogoutRequest(refresh: refreshToken))
+        )
+
+        do {
+            let _: VoidAPIResponse = try await publicRequest(endpoint)
+        } catch {
+            // Idempotent endpoint: ignore errors and still clear local tokens.
+            print("[API] logout call failed (ignored): \(error)")
+        }
+
+        TokenStore.shared.clearAll()
+    }
+}
+
+// MARK: - API Client Extensions for Subscriptions
+
+extension APIClient {
+    
+    /// POST /subscriptions/apple/validate/
+    func validateAppleTransaction(jwsTransaction: String) async throws -> SubscriptionStatus {
+        let body = AppleValidateRequest(jwsTransaction: jwsTransaction)
+        return try await request(.validateAppleTransaction(body))
+    }
+    
+    /// GET /subscriptions/me/
+    func fetchSubscriptionStatus() async throws -> SubscriptionStatus {
+        return try await request(.subscriptionStatus)
     }
 }
 
@@ -622,13 +701,15 @@ extension Endpoint {
         )
     }
 
-    /// GET /api/v1/jobs/nearby/?lat=&lng=&radius=
-    static func nearbyJobs(lat: Double?, lng: Double?, postalCode: String? = nil, radius: Int? = nil) -> Endpoint {
+    /// GET /api/v1/jobs/nearby/?lat=&lng=&radius=&filter=
+    static func nearbyJobs(lat: Double?, lng: Double?, postalCode: String? = nil,
+                            radius: Int? = nil, filter: String? = nil) -> Endpoint {
         var items: [URLQueryItem] = []
-        if let lat = lat { items.append(URLQueryItem(name: "lat", value: "\(lat)")) }
-        if let lng = lng { items.append(URLQueryItem(name: "lng", value: "\(lng)")) }
-        if let pc = postalCode { items.append(URLQueryItem(name: "postal_code", value: pc)) }
-        if let r = radius { items.append(URLQueryItem(name: "radius", value: "\(r)")) }
+        if let lat = lat { items.append(URLQueryItem(name: "lat",         value: "\(lat)")) }
+        if let lng = lng { items.append(URLQueryItem(name: "lng",         value: "\(lng)")) }
+        if let pc  = postalCode { items.append(URLQueryItem(name: "postal_code", value: pc)) }
+        if let r   = radius { items.append(URLQueryItem(name: "radius",   value: "\(r)")) }
+        if let f   = filter { items.append(URLQueryItem(name: "filter",   value: f)) }
         return Endpoint(path: "/api/v1/jobs/nearby/", method: .get, queryItems: items.isEmpty ? nil : items)
     }
 
@@ -674,4 +755,15 @@ extension Endpoint {
     static func completeJob(jobId: Int) -> Endpoint {
         Endpoint(path: "/api/v1/jobs/\(jobId)/complete/", method: .post)
     }
+    
+    // MARK: - Subscriptions Endpoints
+    
+    /// POST /api/v1/subscriptions/apple/validate/
+    static func validateAppleTransaction(_ req: AppleValidateRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/subscriptions/apple/validate/", method: .post,
+                 body: AnyEncodable(req))
+    }
+    
+    /// GET /api/v1/subscriptions/me/
+    static let subscriptionStatus = Endpoint(path: "/api/v1/subscriptions/me/", method: .get)
 }

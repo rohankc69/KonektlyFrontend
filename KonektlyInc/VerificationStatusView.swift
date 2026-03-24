@@ -11,8 +11,10 @@ import PhotosUI
 struct VerificationStatusView: View {
     @EnvironmentObject private var authStore: AuthStore
     @StateObject private var photoUploader = ProfilePhotoUploader()
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var isRefreshing = false
     @State private var showEmailVerification = false
+    @State private var showSubscription = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showDeleteConfirm = false
     @State private var showPhotoOptions = false
@@ -88,6 +90,18 @@ struct VerificationStatusView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
                                 Button("Close") { showEmailVerification = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showSubscription) {
+                NavigationStack {
+                    SubscriptionView()
+                        .navigationTitle("Konektly+")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") { showSubscription = false }
                             }
                         }
                 }
@@ -286,6 +300,12 @@ struct VerificationStatusView: View {
                 if user?.emailVerified != true {
                     showEmailVerification = true
                 }
+            }
+            menuDivider
+
+            // Konektly+ subscription row
+            SubscriptionMenuItem(isActive: subscriptionManager.isKonektlyPlus) {
+                showSubscription = true
             }
             menuDivider
 
@@ -583,6 +603,61 @@ struct ProfileMenuItem: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Color(UIColor.systemGray3))
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.vertical, Theme.Spacing.lg)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Subscription Menu Item
+
+struct SubscriptionMenuItem: View {
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.lg) {
+                Image(systemName: isActive ? "checkmark.seal.fill" : "star.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Theme.Colors.accent)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isActive ? "Konektly+" : "Upgrade to Konektly+")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.primaryText)
+                    Text(isActive ? "All premium features active" : "Unlock exact locations & more")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+
+                Spacer()
+
+                if isActive {
+                    Text("Active")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.success)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Theme.Colors.success.opacity(0.12))
+                        .clipShape(Capsule())
+                } else {
+                    Text("Upgrade")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Theme.Colors.accent)
+                        .clipShape(Capsule())
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(UIColor.systemGray3))
             }
             .padding(.horizontal, Theme.Spacing.xl)
             .padding(.vertical, Theme.Spacing.lg)

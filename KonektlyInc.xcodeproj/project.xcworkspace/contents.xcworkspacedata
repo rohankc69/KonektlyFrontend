@@ -4,4 +4,16 @@
    <FileRef
       location = "self:">
    </FileRef>
+   <FileRef
+      location = "group:LOCATION_PRIVACY_IMPLEMENTATION.md">
+   </FileRef>
+   <FileRef
+      location = "group:SUBSCRIPTION_ACCESS_POINTS.md">
+   </FileRef>
+   <FileRef
+      location = "group:UPGRADE_LOCATIONS.md">
+   </FileRef>
+   <FileRef
+      location = "group:UPGRADE_BUTTON_GUIDE.md">
+   </FileRef>
 </Workspace>

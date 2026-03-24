@@ -128,18 +128,20 @@ final class JobStore: ObservableObject {
     ///   - forceRefresh: Bypass the isLoading guard and clear stale errors (use from .refreshable).
     func fetchNearbyJobs(lat: Double? = nil, lng: Double? = nil,
                          postalCode: String? = nil, radius: Int? = nil,
+                         filter: String? = nil,
                          forceRefresh: Bool = false) async {
         guard !isLoadingNearbyJobs || forceRefresh else { return }
         isLoadingNearbyJobs = true
-        nearbyJobsError = nil           // always clear error so stale message disappears
+        nearbyJobsError = nil
         defer { isLoadingNearbyJobs = false }
 
         do {
             let endpoint = Endpoint.nearbyJobs(lat: lat, lng: lng,
-                                               postalCode: postalCode, radius: radius)
+                                               postalCode: postalCode, radius: radius,
+                                               filter: filter)
             let response: NearbyJobsResponse = try await APIClient.shared.request(endpoint)
             nearbyJobs = response.jobs
-            print("[JOBS] fetchNearbyJobs: \(response.count) jobs returned")
+            print("[JOBS] fetchNearbyJobs: \(response.count) jobs (filter=\(filter ?? "all"))")
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             nearbyJobsError = storeError
