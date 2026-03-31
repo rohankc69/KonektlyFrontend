@@ -6,292 +6,253 @@
 //
 
 import SwiftUI
+import PhotosUI
 
 struct ProfileView: View {
+    @EnvironmentObject private var authStore: AuthStore
     @AppStorage("userRole") private var userRoleRaw: String = UserRole.worker.rawValue
-    @State private var isAvailable = true
     @State private var showSettings = false
     @State private var showTerms = false
     @State private var showSubscription = false
+    @State private var showEditProfile = false
+    @State private var selectedPhoto: PhotosPickerItem? = nil
+    @StateObject private var photoUploader = ProfilePhotoUploader()
     @StateObject private var subscriptionManager = SubscriptionManager.shared
-    
+
     private var userRole: UserRole {
         UserRole(rawValue: userRoleRaw) ?? .worker
     }
-    
+
+    private var currentUser: AuthUser? { authStore.currentUser }
+
+    private var displayName: String {
+        let first = currentUser?.firstName ?? ""
+        let last = currentUser?.lastName ?? ""
+        let full = [first, last].filter { !$0.isEmpty }.joined(separator: " ")
+        return full.isEmpty ? "Your Name" : full
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.Spacing.xl) {
-                    // Profile Header
-                    VStack(spacing: Theme.Spacing.lg) {
-                        // Avatar
-                        ZStack(alignment: .bottomTrailing) {
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Theme.Colors.primary, Theme.Colors.primary.opacity(0.7)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .frame(width: Theme.Sizes.avatarExtraLarge, height: Theme.Sizes.avatarExtraLarge)
-                            
-                            HStack(spacing: Theme.Spacing.sm) {
-                                Image(systemName: "person.circle.fill")
-                                    .font(.system(size: 56))
-                                    .foregroundColor(.white)
-                                
-                                // Active subscription badge
-                                if subscriptionManager.isKonektlyPlus {
-                                    ActiveSubscriptionBadge()
-                                        .offset(y: 20)
-                                }
-                            }
-                            
-                            // Verified badge
-                            if MockData.currentUser.isVerified {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color(UIColor.systemBackground))
-                                        .frame(width: 32, height: 32)
-                                    
-                                    Image(systemName: "checkmark.seal.fill")
-                                        .font(.system(size: 28))
-                                        .foregroundColor(.blue)
-                                }
-                                .offset(x: 5, y: 5)
-                            }
-                            
-                            // Edit button
-                            Button(action: {}) {
-                                Image(systemName: "pencil.circle.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(Theme.Colors.accent)
-                                    .background(Circle().fill(Color(UIColor.systemBackground)).padding(-4))
-                            }
-                            .offset(x: -5, y: -5)
+
+                // MARK: Profile Header
+                VStack(spacing: Theme.Spacing.lg) {
+
+                    // Avatar with photo picker
+                    ZStack(alignment: .bottomTrailing) {
+                        avatarView
+                            .frame(width: Theme.Sizes.avatarExtraLarge, height: Theme.Sizes.avatarExtraLarge)
+
+                        if subscriptionManager.isKonektlyPlus {
+                            ActiveSubscriptionBadge()
+                                .offset(x: -Theme.Sizes.avatarExtraLarge / 4, y: 0)
                         }
-                        
-                        // Name and role
-                        VStack(spacing: Theme.Spacing.xs) {
-                            Text(MockData.currentUser.name)
-                                .font(Theme.Typography.title1)
-                                .foregroundColor(Theme.Colors.primaryText)
-                            
-                            Text(userRole == .worker ? "Worker" : "Business Owner")
-                                .font(Theme.Typography.subheadline)
-                                .foregroundColor(Theme.Colors.secondaryText)
+
+                        // Camera button — triggers photo picker
+                        PhotosPicker(
+                            selection: $selectedPhoto,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            Image(systemName: "camera.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(Theme.Colors.accent)
+                                .background(Circle().fill(Color(UIColor.systemBackground)).padding(-4))
                         }
-                        
-                        // Rating and stats
-                        HStack(spacing: Theme.Spacing.xl) {
-                            StatView(
-                                icon: "star.fill",
-                                value: String(format: "%.1f", MockData.currentUser.rating),
-                                label: "Rating",
-                                color: .yellow
-                            )
-                            
-                            StatView(
-                                icon: "checkmark.circle.fill",
-                                value: "\(MockData.currentUser.completedShifts)",
-                                label: "Completed",
-                                color: Theme.Colors.accent
-                            )
-                            
-                            if let hourlyRate = MockData.currentUser.hourlyRate {
-                                StatView(
-                                    icon: "dollarsign.circle.fill",
-                                    value: "$\(Int(hourlyRate))",
-                                    label: "Per Hour",
-                                    color: .blue
-                                )
-                            }
+                        .offset(x: -2, y: -2)
+                        .onChange(of: selectedPhoto) { _, item in
+                            guard let item else { return }
+                            Task { await photoUploader.processSelectedPhoto(item) }
+                            selectedPhoto = nil
                         }
                     }
                     .padding(.top, Theme.Spacing.lg)
-                    
-                    // SUBSCRIPTION CARD - Shows for EVERYONE (manage or upgrade)
-                    if subscriptionManager.isKonektlyPlus {
-                        // Active subscription - show management card
-                        ActiveSubscriptionCard {
-                            showSubscription = true
-                        }
-                        .padding(.horizontal, Theme.Spacing.lg)
-                    } else {
-                        // Not subscribed - show upgrade card
-                        UpgradeCard {
-                            showSubscription = true
-                        }
-                        .padding(.horizontal, Theme.Spacing.lg)
+
+                    // Upload progress overlay
+                    if photoUploader.isActive {
+                        photoUploadStatusView
                     }
-                    
-                    // Availability Toggle (for workers)
-                    if userRole == .worker {
-                        VStack(spacing: Theme.Spacing.md) {
-                            Toggle(isOn: $isAvailable) {
-                                HStack(spacing: Theme.Spacing.sm) {
-                                    Circle()
-                                        .fill(isAvailable ? Theme.Colors.success : Color.gray)
-                                        .frame(width: 12, height: 12)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Available for Work")
-                                            .font(Theme.Typography.headlineSemibold)
-                                            .foregroundColor(Theme.Colors.primaryText)
-                                        
-                                        Text(isAvailable ? "You're visible to businesses" : "You won't receive job offers")
-                                            .font(Theme.Typography.caption)
-                                            .foregroundColor(Theme.Colors.secondaryText)
-                                    }
-                                }
-                            }
-                            .tint(Theme.Colors.accent)
-                        }
-                        .padding(Theme.Spacing.lg)
-                        .cardStyle()
-                        .padding(.horizontal, Theme.Spacing.lg)
-                        .onChange(of: isAvailable) { _, _ in
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
-                        }
-                    }
-                    
-                    // Bio Section
-                    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        Text("About")
-                            .font(Theme.Typography.title3)
+
+                    // Name and role
+                    VStack(spacing: Theme.Spacing.xs) {
+                        Text(displayName)
+                            .font(Theme.Typography.title1)
                             .foregroundColor(Theme.Colors.primaryText)
-                        
-                        Text(MockData.currentUser.bio)
-                            .font(Theme.Typography.body)
+
+                        Text(userRole == .worker ? "Worker" : "Business Owner")
+                            .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Theme.Spacing.lg)
-                    .cardStyle()
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    
-                    // Skills Section
-                    if !MockData.currentUser.skills.isEmpty {
-                        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                            Text("Skills")
-                                .font(Theme.Typography.title3)
-                                .foregroundColor(Theme.Colors.primaryText)
-                            
-                            FlowLayout(spacing: Theme.Spacing.sm) {
-                                ForEach(MockData.currentUser.skills, id: \.self) { skill in
-                                    Text(skill)
-                                        .font(Theme.Typography.subheadline.weight(.medium))
-                                        .foregroundColor(Theme.Colors.accent)
-                                        .padding(.horizontal, Theme.Spacing.md)
-                                        .padding(.vertical, Theme.Spacing.sm)
-                                        .background(Theme.Colors.accent.opacity(0.1))
-                                        .cornerRadius(Theme.CornerRadius.pill)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: Theme.CornerRadius.pill)
-                                                .stroke(Theme.Colors.accent.opacity(0.3), lineWidth: 1)
-                                        )
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Theme.Spacing.lg)
-                        .cardStyle()
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+
+                // MARK: Subscription card
+                if subscriptionManager.isKonektlyPlus {
+                    ActiveSubscriptionCard { showSubscription = true }
                         .padding(.horizontal, Theme.Spacing.lg)
-                    }
-                    
-                    // Settings List
-                    VStack(spacing: 0) {
-                        SettingsRow(icon: "person.fill", title: "Edit Profile", showChevron: true) {}
-                        Divider().padding(.leading, 52)
-                        
-                        // Subscription row - AVAILABLE FOR ALL USERS
-                        SettingsRow(
-                            icon: "star.circle.fill",
-                            title: subscriptionManager.isKonektlyPlus ? "Konektly+ Active" : "Upgrade to Konektly+",
-                            showChevron: true
-                        ) {
-                            showSubscription = true
-                        }
-                        Divider().padding(.leading, 52)
-                        
-                        SettingsRow(icon: "bell.fill", title: "Notifications", showChevron: true) {}
-                        Divider().padding(.leading, 52)
-                        
-                        SettingsRow(icon: "creditcard.fill", title: "Payment Methods", showChevron: true) {}
-                        Divider().padding(.leading, 52)
-                        
-                        SettingsRow(icon: "doc.text.fill", title: "Work History", showChevron: true) {}
-                        Divider().padding(.leading, 52)
-                        
-                        SettingsRow(icon: "questionmark.circle.fill", title: "Help & Support", showChevron: true) {}
-                        Divider().padding(.leading, 52)
+                } else {
+                    UpgradeCard { showSubscription = true }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                }
 
-                        SettingsRow(icon: "doc.text.fill", title: "Terms & Conditions", showChevron: true) {
-                            showTerms = true
-                        }
-                        Divider().padding(.leading, 52)
+                // MARK: Settings list
+                VStack(spacing: 0) {
+                    SettingsRow(icon: "person.fill", title: "Edit Profile", showChevron: true) {
+                        showEditProfile = true
+                    }
+                    Divider().padding(.leading, 52)
 
-                        SettingsRow(icon: "gearshape.fill", title: "Settings", showChevron: true) {}
+                    SettingsRow(
+                        icon: "star.circle.fill",
+                        title: subscriptionManager.isKonektlyPlus ? "Konektly+ Active" : "Upgrade to Konektly+",
+                        showChevron: true
+                    ) {
+                        showSubscription = true
                     }
-                    .cardStyle()
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    
-                    // Logout button
-                    Button(action: logout) {
-                        Text("Log Out")
-                            .font(Theme.Typography.headlineSemibold)
-                            .foregroundColor(.red)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: Theme.Sizes.buttonHeight)
-                            .background(Theme.Colors.cardBackground)
-                            .cornerRadius(Theme.CornerRadius.medium)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
-                                    .stroke(Color.red.opacity(0.3), lineWidth: 1.5)
-                            )
+                    Divider().padding(.leading, 52)
+
+                    SettingsRow(icon: "gearshape.fill", title: "Settings", showChevron: true) {
+                        showSettings = true
                     }
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    .padding(.bottom, Theme.Spacing.xl)
-                }
-            }
-            .navigationTitle("Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showSettings.toggle() }) {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundColor(Theme.Colors.primaryText)
+                    Divider().padding(.leading, 52)
+
+                    SettingsRow(icon: "doc.text.fill", title: "Terms & Conditions", showChevron: true) {
+                        showTerms = true
                     }
                 }
+                .cardStyle()
+                .padding(.horizontal, Theme.Spacing.lg)
+
+                // MARK: Logout
+                Button(action: logout) {
+                    Text("Log Out")
+                        .font(Theme.Typography.headlineSemibold)
+                        .foregroundColor(.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Theme.Sizes.buttonHeight)
+                        .background(Theme.Colors.cardBackground)
+                        .cornerRadius(Theme.CornerRadius.medium)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)
+                                .stroke(Color.red.opacity(0.3), lineWidth: 1.5)
+                        )
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.bottom, Theme.Spacing.xl)
             }
-            .navigationDestination(isPresented: $showTerms) {
-                TermsReadView()
+        }
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: { showSettings.toggle() }) {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(Theme.Colors.primaryText)
+                }
             }
-            .sheet(isPresented: $showSubscription) {
-                NavigationStack {
-                    SubscriptionView()
-                        .navigationTitle("Konektly+")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button("Done") {
-                                    showSubscription = false
-                                }
-                            }
+        }
+        .navigationDestination(isPresented: $showTerms) {
+            TermsReadView()
+        }
+        .navigationDestination(isPresented: $showEditProfile) {
+            EditProfileView()
+        }
+        .sheet(isPresented: $showSubscription) {
+            NavigationStack {
+                SubscriptionView()
+                    .navigationTitle("Konektly+")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") { showSubscription = false }
                         }
-                }
+                    }
             }
+        }
     }
 
+    // MARK: - Avatar
+
+    @ViewBuilder
+    private var avatarView: some View {
+        if let preview = photoUploader.previewImage {
+            Image(uiImage: preview)
+                .resizable()
+                .scaledToFill()
+                .clipShape(Circle())
+        } else if let url = currentUser?.profilePhoto?.displayURL {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill().clipShape(Circle())
+                case .failure:
+                    defaultAvatar
+                case .empty:
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                @unknown default:
+                    defaultAvatar
+                }
+            }
+        } else {
+            defaultAvatar
+        }
+    }
+
+    private var defaultAvatar: some View {
+        Circle()
+            .fill(
+                LinearGradient(
+                    colors: [Theme.Colors.buttonPrimary, Theme.Colors.buttonPrimary.opacity(0.7)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                Image(systemName: "person.fill")
+                    .font(.system(size: 40))
+                    .foregroundColor(.white)
+            )
+    }
+
+    // MARK: - Upload status
+
+    @ViewBuilder
+    private var photoUploadStatusView: some View {
+        switch photoUploader.state {
+        case .uploading(let progress):
+            HStack(spacing: Theme.Spacing.sm) {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 120)
+                Text("Uploading…")
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.secondaryText)
+            }
+        case .confirming:
+            Label("Saving…", systemImage: "arrow.clockwise")
+                .font(Theme.Typography.caption)
+                .foregroundColor(Theme.Colors.secondaryText)
+        case .processing:
+            Label("Processing…", systemImage: "hourglass")
+                .font(Theme.Typography.caption)
+                .foregroundColor(Theme.Colors.secondaryText)
+        case .error(let msg):
+            Label(msg, systemImage: "exclamationmark.circle")
+                .font(Theme.Typography.caption)
+                .foregroundColor(Theme.Colors.error)
+        default:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Logout
+
     private func logout() {
-        // Reset onboarding state
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
-        
-        // Haptic feedback
-        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-        impactFeedback.impactOccurred()
+        Task { await APIClient.shared.logout() }
+        authStore.signOut()
     }
 }
 
@@ -302,17 +263,15 @@ struct StatView: View {
     let value: String
     let label: String
     let color: Color
-    
+
     var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
             Image(systemName: icon)
                 .font(.system(size: Theme.Sizes.iconLarge))
                 .foregroundColor(color)
-            
             Text(value)
                 .font(Theme.Typography.title2)
                 .foregroundColor(Theme.Colors.primaryText)
-            
             Text(label)
                 .font(Theme.Typography.caption)
                 .foregroundColor(Theme.Colors.secondaryText)
@@ -327,7 +286,7 @@ struct SettingsRow: View {
     let title: String
     let showChevron: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Spacing.md) {
@@ -335,13 +294,10 @@ struct SettingsRow: View {
                     .font(.system(size: Theme.Sizes.iconMedium))
                     .foregroundColor(Theme.Colors.primaryText)
                     .frame(width: 28)
-                
                 Text(title)
                     .font(Theme.Typography.body)
                     .foregroundColor(Theme.Colors.primaryText)
-                
                 Spacer()
-                
                 if showChevron {
                     Image(systemName: "chevron.right")
                         .font(.system(size: Theme.Sizes.iconSmall))
@@ -359,55 +315,44 @@ struct SettingsRow: View {
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-    
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = FlowResult(
-            in: proposal.replacingUnspecifiedDimensions().width,
-            subviews: subviews,
-            spacing: spacing
-        )
-        return result.size
+        FlowResult(in: proposal.replacingUnspecifiedDimensions().width, subviews: subviews, spacing: spacing).size
     }
-    
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = FlowResult(
-            in: bounds.width,
-            subviews: subviews,
-            spacing: spacing
-        )
+        let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
         for (index, subview) in subviews.enumerated() {
-            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
+            subview.place(
+                at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y),
+                proposal: .unspecified
+            )
         }
     }
-    
+
     struct FlowResult {
         var size: CGSize = .zero
         var positions: [CGPoint] = []
-        
+
         init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
-            var currentX: CGFloat = 0
-            var currentY: CGFloat = 0
-            var lineHeight: CGFloat = 0
-            
+            var x: CGFloat = 0
+            var y: CGFloat = 0
+            var lineH: CGFloat = 0
             for subview in subviews {
-                let size = subview.sizeThatFits(.unspecified)
-                
-                if currentX + size.width > maxWidth && currentX > 0 {
-                    currentX = 0
-                    currentY += lineHeight + spacing
-                    lineHeight = 0
-                }
-                
-                positions.append(CGPoint(x: currentX, y: currentY))
-                lineHeight = max(lineHeight, size.height)
-                currentX += size.width + spacing
+                let s = subview.sizeThatFits(.unspecified)
+                if x + s.width > maxWidth && x > 0 { x = 0; y += lineH + spacing; lineH = 0 }
+                positions.append(CGPoint(x: x, y: y))
+                lineH = max(lineH, s.height)
+                x += s.width + spacing
             }
-            
-            self.size = CGSize(width: maxWidth, height: currentY + lineHeight)
+            size = CGSize(width: maxWidth, height: y + lineH)
         }
     }
 }
 
 #Preview {
-    ProfileView()
+    NavigationStack {
+        ProfileView()
+            .environmentObject(AuthStore.shared)
+    }
 }

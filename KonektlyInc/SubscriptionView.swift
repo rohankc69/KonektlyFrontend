@@ -23,9 +23,16 @@ struct SubscriptionView: View {
                 UpgradeView(
                     price: manager.displayPrice,
                     isPurchasing: manager.isPurchasing,
+                    isLoadingProduct: manager.isLoadingProduct,
                     onPurchase: { Task { await manager.purchase() } },
-                    onRestore: { Task { await manager.restorePurchases() } }
+                    onRestore: { Task { await manager.restorePurchases() } },
+                    onRetry: { Task { await manager.loadProduct() } }
                 )
+            }
+        }
+        .task {
+            if manager.storeKitProduct == nil && !manager.isLoadingProduct {
+                await manager.loadProduct()
             }
         }
         .alert("Error", isPresented: .constant(manager.error != nil)) {

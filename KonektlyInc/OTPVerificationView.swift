@@ -21,9 +21,6 @@ struct OTPVerificationView: View {
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
 
-    @State private var isDevMode = false
-    @State private var devCode = ""
-
     private var otpCode: String { otpDigits.joined() }
     private var isComplete: Bool { otpCode.count == 6 }
     private var canSubmit: Bool { isComplete && !isLoading }
@@ -41,26 +38,8 @@ struct OTPVerificationView: View {
                     }
                     .padding(.top, Theme.Spacing.xxl)
 
-                    if isDevMode {
-                        // Dev fallback input
-                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                            Text("Dev code")
-                                .font(Theme.Typography.caption)
-                                .foregroundColor(Theme.Colors.secondaryText)
-                            TextField("Enter code from backend logs", text: $devCode)
-                                .keyboardType(.numberPad)
-                                .font(Theme.Typography.body)
-                                .padding(Theme.Spacing.lg)
-                                .background(Theme.Colors.inputBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
-                                        .stroke(Theme.Colors.inputBorderFocused, lineWidth: 2)
-                                )
-                        }
-                    } else {
-                        // OTP digit boxes
-                        HStack(spacing: Theme.Spacing.sm) {
+                    // OTP digit boxes
+                    HStack(spacing: Theme.Spacing.sm) {
                             ForEach(0..<6, id: \.self) { index in
                                 ZStack {
                                     RoundedRectangle(cornerRadius: Theme.CornerRadius.small)
@@ -91,8 +70,7 @@ struct OTPVerificationView: View {
                         .focused($focusedIndex, equals: 0)
                         .frame(width: 0, height: 0)
                         .opacity(0)
-                        .accessibilityHidden(true)
-                    }
+                    .accessibilityHidden(true)
 
                     // Error
                     if let error = errorMessage {
@@ -114,16 +92,6 @@ struct OTPVerificationView: View {
                         .foregroundColor(Theme.Colors.secondaryText)
                     }
 
-                    // Dev toggle
-                    if Config.isDevOTPFallbackEnabled {
-                        Toggle(isOn: $isDevMode) {
-                            Text("Use dev code fallback")
-                                .font(Theme.Typography.caption)
-                                .foregroundColor(Theme.Colors.secondaryText)
-                        }
-                        .toggleStyle(.switch)
-                        .tint(Theme.Colors.warning)
-                    }
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
             }
@@ -169,7 +137,7 @@ struct OTPVerificationView: View {
                     .frame(height: 48)
                 }
             }
-            .background(nextButtonEnabled ? Color.black : Color.black.opacity(0.3))
+            .background(nextButtonEnabled ? Theme.Colors.buttonPrimary : Theme.Colors.buttonPrimary.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
             .disabled(!nextButtonEnabled)
         }
@@ -178,7 +146,7 @@ struct OTPVerificationView: View {
     }
 
     private var nextButtonEnabled: Bool {
-        isDevMode ? (!devCode.isEmpty && !isLoading) : (canSubmit)
+        canSubmit
     }
 
     // MARK: - OTP Input
@@ -204,13 +172,7 @@ struct OTPVerificationView: View {
         Task {
             defer { isLoading = false }
             do {
-                if isDevMode {
-                    print("[OTP] Submitting via DEV fallback path, code length=\(devCode.count)")
-                    try await authStore.verifyOTPDev(phone: phoneNumber, code: devCode)
-                } else {
-                    print("[OTP] Submitting via FIREBASE path, otp length=\(otpCode.count)")
-                    try await authStore.verifyOTPWithFirebase(phone: phoneNumber, otpCode: otpCode)
-                }
+                try await authStore.verifyOTPWithFirebase(phone: phoneNumber, otpCode: otpCode)
             } catch AppError.rateLimited(let retryAfter) {
                 let secs = Int(retryAfter ?? 60)
                 startCooldown(seconds: secs)

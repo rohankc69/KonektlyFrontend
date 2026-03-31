@@ -141,7 +141,7 @@ struct EmailVerificationView: View {
                                             .foregroundColor(.white)
                                             .frame(maxWidth: .infinity)
                                             .frame(height: 40)
-                                            .background(manualToken.isEmpty ? Color.black.opacity(0.3) : Color.black)
+                                            .background(manualToken.isEmpty ? Theme.Colors.buttonPrimary.opacity(0.3) : Theme.Colors.buttonPrimary)
                                             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
                                     }
                                 }

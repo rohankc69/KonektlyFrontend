@@ -392,7 +392,7 @@ struct PostJobView: View {
                         .frame(height: 48)
                     }
                 }
-                .background(isFormValid ? Color.black : Color.black.opacity(0.3))
+                .background(isFormValid ? Theme.Colors.buttonPrimary : Theme.Colors.buttonPrimary.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
                 .disabled(!isFormValid)
                 .animation(.easeInOut(duration: 0.15), value: isFormValid)
@@ -410,7 +410,7 @@ struct PostJobView: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, Theme.Spacing.xl)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(Color.black)
+                    .background(Theme.Colors.buttonPrimary)
                     .clipShape(Capsule())
                     .padding(.top, Theme.Spacing.lg)
                     .transition(.move(edge: .top).combined(with: .opacity))

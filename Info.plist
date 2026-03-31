@@ -15,18 +15,11 @@
 	</array>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_http._tcp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Konektly connects to a local development server on your network.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Konektly needs access to your photo library to set your profile picture.</string>
+	<dict/>
+	<key>UIBackgroundModes</key>
+	<array/>
 </dict>
 </plist>

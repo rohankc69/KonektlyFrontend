@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		762F52142F724B9000C941CC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 762F52132F724B9000C941CC /* FirebaseAuth */; };
 		762F52162F724B9000C941CC /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 762F52152F724B9000C941CC /* FirebaseCore */; };
+		762F52182F724B9000C941CC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 762F52172F724B9000C941CC /* FirebaseMessaging */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				762F52162F724B9000C941CC /* FirebaseCore in Frameworks */,
 				762F52142F724B9000C941CC /* FirebaseAuth in Frameworks */,
+				762F52182F724B9000C941CC /* FirebaseMessaging in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -129,6 +131,7 @@
 			packageProductDependencies = (
 				762F52132F724B9000C941CC /* FirebaseAuth */,
 				762F52152F724B9000C941CC /* FirebaseCore */,
+				762F52172F724B9000C941CC /* FirebaseMessaging */,
 			);
 			productName = KonektlyInc;
 			productReference = 767C09E72F4D43CC0061DF32 /* KonektlyInc.app */;
@@ -413,14 +416,19 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = KonektlyInc/KonektlyInc.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = U7YP2R3YXR;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = D7WQYKLYT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_APPLE_MODE = sandbox;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Konektly connects to a local development server on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We need your location to show nearby shifts and workers on the map.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Konektly needs access to your photo library to set your profile picture.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -449,14 +457,19 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = KonektlyInc/KonektlyInc.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = U7YP2R3YXR;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = D7WQYKLYT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_APPLE_MODE = sandbox;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Konektly connects to a local development server on your network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We need your location to show nearby shifts and workers on the map.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Konektly needs access to your photo library to set your profile picture.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -622,6 +635,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
+		};
+		762F52172F724B9000C941CC /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 762F52112F724B5800C941CC /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

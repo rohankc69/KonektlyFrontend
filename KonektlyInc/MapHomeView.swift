@@ -46,6 +46,14 @@ struct MapHomeView: View {
         UserRole(rawValue: userRoleRaw) ?? .worker
     }
 
+    /// All job IDs the user has applied to (session + loaded applications)
+    private var allAppliedJobIds: Set<Int> {
+        var ids = jobStore.appliedJobIds
+        for app in jobStore.activeApplications { ids.insert(app.job.id) }
+        for app in jobStore.completedApplications { ids.insert(app.job.id) }
+        return ids
+    }
+
     var body: some View {
         ZStack {
             MapLayerView(
@@ -54,6 +62,7 @@ struct MapHomeView: View {
                 jobs: jobStore.nearbyJobs,
                 stableApproxCenters: stableApproxCenters,
                 selectedJobID: selectedJob?.id,
+                appliedJobIds: allAppliedJobIds,
                 onSelectJob: { job in
                     withAnimation(Theme.Animation.smooth) {
                         selectedJob = job
@@ -131,6 +140,28 @@ struct MapHomeView: View {
                 showPostalFallback = true
             }
         }
+        // Deep-link from push notification — select the job on the map
+        .onChange(of: jobStore.pendingDeepLinkJobId) { _, jobId in
+            guard let jobId else { return }
+            jobStore.pendingDeepLinkJobId = nil
+            Task {
+                // Fetch and inject the job if it's not already in nearbyJobs
+                if let job = await jobStore.fetchAndInjectJob(jobId: jobId) {
+                    withAnimation(Theme.Animation.smooth) {
+                        selectedJob = job
+                        // Center map on the job
+                        if let coord = job.coordinate {
+                            position = .region(MKCoordinateRegion(
+                                center: coord,
+                                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+                            ))
+                        }
+                        sheetDetent = .medium
+                        showBottomSheet = true
+                    }
+                }
+            }
+        }
         // Post Job sheet (business only)
         .sheet(isPresented: $showPostJobSheet) {
             PostJobView()
@@ -184,6 +215,7 @@ private struct MapLayerView: View {
     let jobs: [APIJob]
     let stableApproxCenters: [Int: CLLocationCoordinate2D]
     let selectedJobID: Int?
+    let appliedJobIds: Set<Int>
     let onSelectJob: (APIJob) -> Void
 
     var body: some View {
@@ -197,13 +229,17 @@ private struct MapLayerView: View {
                         // Fall back to current coordinate only if not yet cached.
                         if let center = stableApproxCenters[job.id] ?? job.coordinate {
                             // Semi-transparent radius blob — 1500 m covers the server's ±800–1500 m fuzz
+                            let circleColor = appliedJobIds.contains(job.id) ? Color(UIColor.systemGray3) : Color.blue
                             MapCircle(center: center, radius: 1500)
-                                .foregroundStyle(Color.blue.opacity(0.10))
-                                .stroke(Color.blue.opacity(0.22), lineWidth: 1.5)
+                                .foregroundStyle(circleColor.opacity(0.10))
+                                .stroke(circleColor.opacity(0.22), lineWidth: 1.5)
 
                             // Tappable annotation at center so user can open the job card
                             Annotation("", coordinate: center) {
-                                ApproximateJobMarker(isSelected: job.id == selectedJobID) {
+                                ApproximateJobMarker(
+                                    isSelected: job.id == selectedJobID,
+                                    isApplied: appliedJobIds.contains(job.id)
+                                ) {
                                     onSelectJob(job)
                                 }
                             }
@@ -213,7 +249,8 @@ private struct MapLayerView: View {
                             MapPinView(
                                 isUrgent: false,
                                 isSelected: job.id == selectedJobID,
-                                isApproximate: false
+                                isApproximate: false,
+                                isApplied: appliedJobIds.contains(job.id)
                             ) { onSelectJob(job) }
                         }
                     }
@@ -347,7 +384,7 @@ private struct MapOverlayView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, Theme.Spacing.xl)
                     .padding(.vertical, 14)
-                    .background(Theme.Colors.primaryText)
+                    .background(Theme.Colors.buttonPrimary)
                     .clipShape(Capsule())
                     .shadow(color: Theme.Shadows.large.color,
                             radius: Theme.Shadows.large.radius,
@@ -443,6 +480,7 @@ struct MapBottomSheetView: View {
 struct NearbyJobCardView: View {
     let job: APIJob
     @State private var showSubscription = false
+    @State private var showBusinessProfile = false
     @StateObject private var subscriptionManager = SubscriptionManager.shared
 
     private static let dateFormatter: DateFormatter = {
@@ -454,6 +492,42 @@ struct NearbyJobCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            // Business info row
+            if let clientName = job.clientName {
+                Button {
+                    showBusinessProfile = true
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        if let logoUrl = job.clientLogoUrl, let url = URL(string: logoUrl) {
+                            AsyncImage(url: url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Image(systemName: "building.2.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.Colors.tertiaryText)
+                            }
+                            .frame(width: 24, height: 24)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+
+                        Text(clientName)
+                            .font(Theme.Typography.subheadline)
+                            .foregroundColor(Theme.Colors.secondaryText)
+
+                        if let rating = job.clientAvgRating, let count = job.clientReviewCount, count > 0 {
+                            InlineStarRating(avgRating: rating, reviewCount: count)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.Colors.tertiaryText)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
             HStack {
                 Text(job.title)
                     .font(Theme.Typography.headlineSemibold)
@@ -517,6 +591,18 @@ struct NearbyJobCardView: View {
                     }
             }
         }
+        .sheet(isPresented: $showBusinessProfile) {
+            NavigationStack {
+                PublicBusinessProfileView(userId: job.clientId)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showBusinessProfile = false
+                            }
+                        }
+                    }
+            }
+        }
     }
 }
 
@@ -534,7 +620,13 @@ struct MapPinView: View {
     let isUrgent: Bool
     let isSelected: Bool
     let isApproximate: Bool
+    var isApplied: Bool = false
     let action: () -> Void
+
+    private var pinColor: Color {
+        if isApplied { return Color(UIColor.systemGray3) }
+        return isUrgent ? Theme.Colors.urgent : Theme.Colors.primary
+    }
 
     var body: some View {
         Button(action: action) {
@@ -542,19 +634,19 @@ struct MapPinView: View {
                 // Approximate location indicator (larger, semi-transparent circle)
                 if isApproximate {
                     Circle()
-                        .fill((isUrgent ? Theme.Colors.urgent : Theme.Colors.primary).opacity(0.2))
+                        .fill(pinColor.opacity(0.2))
                         .frame(width: isSelected ? 80 : 70, height: isSelected ? 80 : 70)
                 }
-                
+
                 Circle()
-                    .fill(isUrgent ? Theme.Colors.urgent : Theme.Colors.primary)
+                    .fill(pinColor)
                     .frame(width: isSelected ? 48 : 40, height: isSelected ? 48 : 40)
                     .shadow(color: Theme.Shadows.medium.color,
                             radius: Theme.Shadows.medium.radius,
                             x: 0, y: Theme.Shadows.medium.y)
 
-                Image(systemName: "figure.stand")
-                    .font(.system(size: isSelected ? 24 : 20))
+                Image(systemName: isApplied ? "checkmark" : "figure.stand")
+                    .font(.system(size: isSelected ? 24 : 20, weight: isApplied ? .bold : .regular))
                     .foregroundColor(.white)
 
                 if isSelected {
@@ -562,7 +654,7 @@ struct MapPinView: View {
                         .stroke(Color.white, lineWidth: 3)
                         .frame(width: 56, height: 56)
                 }
-                
+
                 // Small indicator badge for approximate locations
                 if isApproximate && !isSelected {
                     Circle()
@@ -570,7 +662,7 @@ struct MapPinView: View {
                         .frame(width: 12, height: 12)
                         .overlay(
                             Circle()
-                                .stroke(isUrgent ? Theme.Colors.urgent : Theme.Colors.primary, lineWidth: 2)
+                                .stroke(pinColor, lineWidth: 2)
                         )
                         .offset(x: 14, y: -14)
                 }
@@ -586,16 +678,21 @@ struct MapPinView: View {
 /// Deliberately vague — communicates "a job exists in this area" without implying precision.
 struct ApproximateJobMarker: View {
     let isSelected: Bool
+    var isApplied: Bool = false
     let action: () -> Void
+
+    private var dotColor: Color {
+        isApplied ? Color(UIColor.systemGray3) : Color.blue
+    }
 
     var body: some View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(Color.blue.opacity(isSelected ? 0.3 : 0.18))
+                    .fill(dotColor.opacity(isSelected ? 0.3 : 0.18))
                     .frame(width: isSelected ? 36 : 28, height: isSelected ? 36 : 28)
                 Circle()
-                    .fill(Color.blue.opacity(0.7))
+                    .fill(dotColor.opacity(0.7))
                     .frame(width: isSelected ? 14 : 10, height: isSelected ? 14 : 10)
                 if isSelected {
                     Circle()
@@ -652,10 +749,10 @@ struct FilterChipView: View {
                 Text(filter.rawValue)
                     .font(Theme.Typography.subheadline.weight(.medium))
             }
-            .foregroundColor(isSelected ? .white : Theme.Colors.primary)
+            .foregroundColor(isSelected ? .white : Theme.Colors.primaryText)
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
-            .background(isSelected ? Theme.Colors.primary : Theme.Colors.cardBackground)
+            .background(isSelected ? Theme.Colors.buttonPrimary : Theme.Colors.cardBackground)
             .clipShape(Capsule())
             .shadow(color: Theme.Shadows.small.color,
                     radius: Theme.Shadows.small.radius,

@@ -8,10 +8,12 @@
 import SwiftUI
 
 struct AppRootView: View {
-    @State private var hasPickedRole = false
+    @AppStorage("hasPickedRole") private var hasPickedRole = false
     @State private var selectedTab = 0
 
     @EnvironmentObject private var authStore: AuthStore
+    @EnvironmentObject private var messageStore: MessageStore
+    @EnvironmentObject private var jobStore: JobStore
 
     var body: some View {
         Group {
@@ -33,6 +35,12 @@ struct AppRootView: View {
                 Task { try? await authStore.verifyEmailToken(token) }
             }
         }
+        // Reset tab to Home when user logs in/out
+        .onChange(of: authStore.isAuthenticated) { _, isAuth in
+            if isAuth {
+                selectedTab = 0
+            }
+        }
     }
 
     // MARK: - Authenticated Flow
@@ -46,6 +54,8 @@ struct AppRootView: View {
             NavigationStack { DOBEntryView() }
         case .terms:
             NavigationStack { TermsAcceptView() }
+        case .privacy:
+            NavigationStack { PrivacyAcceptView() }
         case .profileDetails:
             NavigationStack { profileCreationView }
         case .complete:
@@ -79,12 +89,29 @@ struct AppRootView: View {
             MessagesView()
                 .tabItem { Label("Messages", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(2)
+                .badge(messageStore.totalUnreadCount)
 
             VerificationStatusView()
                 .tabItem { Label("Account", systemImage: "person.fill") }
                 .tag(3)
         }
         .tint(Theme.Colors.primary)
+        .onChange(of: messageStore.pendingDeepLinkConversationId) { _, newId in
+            if newId != nil {
+                selectedTab = 2
+            }
+        }
+        .onChange(of: jobStore.pendingDeepLinkJobId) { _, newId in
+            if newId != nil {
+                selectedTab = 0
+            }
+        }
+        .task {
+            // Pre-fetch applications so map can show applied markers immediately
+            if authStore.selectedRole == .worker {
+                await jobStore.fetchMyApplications()
+            }
+        }
     }
 }
 

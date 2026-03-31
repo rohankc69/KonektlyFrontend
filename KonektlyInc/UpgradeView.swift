@@ -10,10 +10,13 @@ import SwiftUI
 struct UpgradeView: View {
     let price: String
     let isPurchasing: Bool
+    let isLoadingProduct: Bool
     let onPurchase: () -> Void
     let onRestore: () -> Void
+    let onRetry: () -> Void
 
     private var isProductLoaded: Bool { !price.isEmpty }
+    private var loadFailed: Bool { !isProductLoaded && !isLoadingProduct }
 
     var body: some View {
         ScrollView {
@@ -81,9 +84,21 @@ struct UpgradeView: View {
                                 .font(Theme.Typography.subheadline)
                                 .foregroundStyle(Theme.Colors.secondaryText)
                         }
-                    } else {
+                    } else if isLoadingProduct {
                         ProgressView()
                             .frame(height: 44)
+                    } else {
+                        VStack(spacing: Theme.Spacing.sm) {
+                            Text("Could not load pricing")
+                                .font(Theme.Typography.bodyMedium)
+                                .foregroundStyle(Theme.Colors.secondaryText)
+                            Button(action: onRetry) {
+                                Label("Try Again", systemImage: "arrow.clockwise")
+                                    .font(Theme.Typography.subheadline)
+                                    .foregroundStyle(Theme.Colors.accent)
+                            }
+                        }
+                        .frame(height: 60)
                     }
                     Text("Cancel anytime in App Store settings")
                         .font(Theme.Typography.caption)
@@ -152,7 +167,9 @@ struct UpgradeView: View {
     UpgradeView(
         price: "$9.99",
         isPurchasing: false,
+        isLoadingProduct: false,
         onPurchase: {},
-        onRestore: {}
+        onRestore: {},
+        onRetry: {}
     )
 }

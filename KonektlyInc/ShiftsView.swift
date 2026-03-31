@@ -13,9 +13,15 @@ struct ShiftsView: View {
     @State private var selectedTab = 0
     @State private var searchText = ""
     @State private var showLocationBanner = false   // non-blocking "enable GPS" hint
+    @State private var showReviewSheet = false
+    @State private var reviewJobId: Int?
+    @State private var reviewWorkerName: String?
+    @State private var reviewWorkerPhoto: String?
+    @State private var reviewJobTitle: String?
 
     @EnvironmentObject private var jobStore: JobStore
     @EnvironmentObject private var locationManager: LocationManager
+    @StateObject private var reviewStore = ReviewStore.shared
 
     private var userRole: UserRole {
         UserRole(rawValue: userRoleRaw) ?? .worker
@@ -173,22 +179,30 @@ struct ShiftsView: View {
             .refreshable {
                 let coord = await locationManager.currentCoordinate()
                 if userRole == .worker {
-                    // Run both fetches truly in parallel and wait for both to complete
-                    // forceRefresh: true bypasses isLoading guard so a guard from
-                    // a concurrent .task never blocks the pull-to-refresh
-                    await withTaskGroup(of: Void.self) { group in
-                        group.addTask {
-                            await jobStore.fetchNearbyJobs(
-                                lat: coord?.latitude, lng: coord?.longitude,
-                                forceRefresh: true
-                            )
+                    // Pull-to-refresh by tab:
+                    // - Available: refresh nearby jobs + applications
+                    // - Applied/Completed: refresh only applications
+                    if selectedTab == 0 {
+                        await withTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                await jobStore.fetchNearbyJobs(
+                                    lat: coord?.latitude, lng: coord?.longitude,
+                                    forceRefresh: true
+                                )
+                            }
+                            group.addTask {
+                                await jobStore.fetchMyApplications(
+                                    lat: coord?.latitude, lng: coord?.longitude,
+                                    forceRefresh: true
+                                )
+                            }
                         }
-                        group.addTask {
-                            await jobStore.fetchMyApplications(
-                                lat: coord?.latitude, lng: coord?.longitude,
-                                forceRefresh: true
-                            )
-                        }
+                    } else {
+                        await jobStore.fetchMyApplications(
+                            lat: coord?.latitude,
+                            lng: coord?.longitude,
+                            forceRefresh: true
+                        )
                     }
                 } else {
                     await jobStore.fetchPostedJobs(forceRefresh: true)
@@ -203,6 +217,33 @@ struct ShiftsView: View {
                             lat: coord?.latitude,
                             lng: coord?.longitude
                         )
+                    }
+                }
+            }
+            .sheet(isPresented: $showReviewSheet) {
+                if let jobId = reviewJobId {
+                    ReviewPromptView(
+                        jobId: jobId,
+                        otherUserName: reviewWorkerName ?? "Worker",
+                        otherUserPhotoUrl: reviewWorkerPhoto,
+                        jobTitle: reviewJobTitle ?? "Job",
+                        onDismiss: {
+                            showReviewSheet = false
+                            reviewJobId = nil
+                            jobStore.completionReview = nil
+                        }
+                    )
+                }
+            }
+            .onChange(of: jobStore.completionReview) { _, review in
+                if let review, review.eligible, let worker = review.worker {
+                    reviewJobId = jobStore.completionJobId
+                    reviewJobTitle = jobStore.completionJobTitle
+                    reviewWorkerName = "\(worker.firstName) \(worker.lastName)"
+                    reviewWorkerPhoto = worker.photoUrl
+                    // Show after a brief delay for smoother UX
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showReviewSheet = true
                     }
                 }
             }
@@ -257,7 +298,11 @@ struct ShiftsView: View {
                             ? "No open jobs — tap Post a Job to get started"
                             : "No results for \"\(searchText)\"")
             } else {
-                ForEach(openPostedJobs) { job in PostedJobListCard(job: job) }
+                ForEach(openPostedJobs) { job in
+                    PostedJobListCard(job: job) { conversationId in
+                        MessageStore.shared.pendingDeepLinkConversationId = conversationId
+                    }
+                }
             }
         }
     }
@@ -298,7 +343,11 @@ struct ShiftsView: View {
         } else if activePostedJobs.isEmpty {
             emptyView("person.badge.clock", "No active shifts yet — hire a worker to see them here")
         } else {
-            ForEach(activePostedJobs) { job in PostedJobListCard(job: job) }
+            ForEach(activePostedJobs) { job in
+                PostedJobListCard(job: job) { conversationId in
+                    MessageStore.shared.pendingDeepLinkConversationId = conversationId
+                }
+            }
         }
     }
 
@@ -476,7 +525,7 @@ struct NearbyJobListCard: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(applyButtonDisabled ? Theme.Colors.tertiaryText : Theme.Colors.primary)
+                .background(applyButtonDisabled ? Theme.Colors.tertiaryText : Theme.Colors.buttonPrimary)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
             }
             .disabled(applyButtonDisabled)
@@ -522,6 +571,7 @@ struct NearbyJobListCard: View {
 
 struct PostedJobListCard: View {
     let job: APIJob
+    var onOpenChat: ((UUID) -> Void)? = nil
     @EnvironmentObject private var jobStore: JobStore
     @State private var isExpanded = false
     @State private var localApplications: [JobApplication] = []
@@ -702,6 +752,9 @@ struct PostedJobListCard: View {
                                             }
                                             return a
                                         }
+                                    },
+                                    onMessageTapped: { conversationId in
+                                        onOpenChat?(conversationId)
                                     }
                                 )
                             }
@@ -732,7 +785,9 @@ struct ApplicantRow: View {
     let application: JobApplication
     let jobId: Int
     var onHired: ((JobApplication) -> Void)? = nil
+    var onMessageTapped: ((UUID) -> Void)? = nil
     @EnvironmentObject private var jobStore: JobStore
+    @State private var isStartingChat = false
 
     private var statusColor: Color {
         switch ApplicationStatus(rawValue: application.status) ?? .pending {
@@ -742,69 +797,121 @@ struct ApplicantRow: View {
         }
     }
 
+    private var isPending: Bool {
+        application.status == ApplicationStatus.pending.rawValue
+    }
+
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            // Avatar initials
-            ZStack {
-                Circle()
-                    .fill(Theme.Colors.tertiaryBackground)
-                    .frame(width: 36, height: 36)
-                Text(initials)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.Colors.primaryText)
-            }
+        VStack(spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.md) {
+                // Avatar initials
+                ZStack {
+                    Circle()
+                        .fill(Theme.Colors.tertiaryBackground)
+                        .frame(width: 36, height: 36)
+                    Text(initials)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.Colors.primaryText)
+                }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(application.firstName) \(application.lastName)")
-                    .font(Theme.Typography.subheadline.weight(.medium))
-                    .foregroundColor(Theme.Colors.primaryText)
-                if let note = application.coverNote, !note.isEmpty {
-                    Text(note)
-                        .font(Theme.Typography.caption)
-                        .foregroundColor(Theme.Colors.secondaryText)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(application.firstName) \(application.lastName)")
+                        .font(Theme.Typography.subheadline.weight(.medium))
+                        .foregroundColor(Theme.Colors.primaryText)
+                    if let note = application.coverNote, !note.isEmpty {
+                        Text(note)
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                // Status badge for non-pending
+                if !isPending {
+                    Text(application.status.capitalized)
+                        .font(Theme.Typography.caption.weight(.semibold))
+                        .foregroundColor(statusColor)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(Capsule())
                 }
             }
 
-            Spacer()
-
-            // Status or Hire button
-            if application.status == ApplicationStatus.pending.rawValue {
-                Button {
-                    Task {
-                        if let hired = await jobStore.hireWorker(
-                            jobId: jobId,
-                            applicationId: application.id
-                        ) {
-                            onHired?(hired)
+            // Action buttons for pending applicants
+            if isPending {
+                HStack(spacing: Theme.Spacing.sm) {
+                    // Message button
+                    Button {
+                        startChat()
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isStartingChat {
+                                ProgressView().scaleEffect(0.6)
+                            } else {
+                                Image(systemName: "bubble.left.fill")
+                                    .font(.system(size: 11))
+                            }
+                            Text("Message")
+                                .font(Theme.Typography.caption.weight(.semibold))
                         }
+                        .foregroundColor(Theme.Colors.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(Theme.Colors.accent.opacity(0.12))
+                        .clipShape(Capsule())
                     }
-                } label: {
-                    if jobStore.isHiring {
-                        ProgressView().scaleEffect(0.7)
-                    } else {
-                        Text("Hire")
-                            .font(Theme.Typography.caption.weight(.semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, Theme.Spacing.md)
-                            .padding(.vertical, 6)
-                            .background(Theme.Colors.primaryText)
-                            .clipShape(Capsule())
+                    .buttonStyle(.plain)
+                    .disabled(isStartingChat || jobStore.isHiring)
+
+                    // Hire button
+                    Button {
+                        Task {
+                            if let hired = await jobStore.hireWorker(
+                                jobId: jobId,
+                                applicationId: application.id
+                            ) {
+                                onHired?(hired)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if jobStore.isHiring {
+                                ProgressView().scaleEffect(0.6).tint(.white)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11))
+                            }
+                            Text("Hire")
+                                .font(Theme.Typography.caption.weight(.semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(Theme.Colors.buttonPrimary)
+                        .clipShape(Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(jobStore.isHiring || isStartingChat)
                 }
-                .buttonStyle(.plain)
-                .disabled(jobStore.isHiring)
-            } else {
-                Text(application.status.capitalized)
-                    .font(Theme.Typography.caption.weight(.semibold))
-                    .foregroundColor(statusColor)
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, 4)
-                    .background(statusColor.opacity(0.12))
-                    .clipShape(Capsule())
             }
         }
         .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    private func startChat() {
+        isStartingChat = true
+        Task {
+            do {
+                let conversationId = try await MessageStore.shared.startConversation(applicationId: application.id)
+                onMessageTapped?(conversationId)
+            } catch {
+                print("[CHAT] Failed to start conversation: \(error)")
+            }
+            isStartingChat = false
+        }
     }
 
     private var initials: String {

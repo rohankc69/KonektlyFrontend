@@ -177,7 +177,7 @@ struct OnboardingBottomBar: View {
                     .frame(height: 48)
                 }
             }
-            .background(isEnabled && !isLoading ? Color.black : Color.black.opacity(0.3))
+            .background(isEnabled && !isLoading ? Theme.Colors.buttonPrimary : Theme.Colors.buttonPrimary.opacity(0.3))
             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
             .disabled(!isEnabled || isLoading)
         }

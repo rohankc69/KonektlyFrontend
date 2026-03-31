@@ -48,9 +48,9 @@ final class ProfilePhotoUploader: ObservableObject {
 
     // Constraints
     private let maxFileSize: Int = 5 * 1024 * 1024 // 5 MB
-    private let allowedTypes: Set<String> = ["image/jpeg", "image/png", "image/webp"]
-    private let maxPollingDuration: TimeInterval = 30
-    private let pollingInterval: TimeInterval = 2
+    private let allowedTypes: Set<String> = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]
+    private let maxPollingDuration: TimeInterval = 90
+    private let pollingInterval: TimeInterval = 3
 
     private var pollingTask: Task<Void, Never>?
 
@@ -89,7 +89,7 @@ final class ProfilePhotoUploader: ObservableObject {
 
         let contentType = detectContentType(data: originalData)
         guard allowedTypes.contains(contentType) else {
-            state = .error("Unsupported format. Please use JPEG, PNG, or WebP.")
+            state = .error("Unsupported format. Please use JPEG, PNG, WebP, HEIC, or HEIF.")
             return
         }
 
@@ -131,9 +131,11 @@ final class ProfilePhotoUploader: ObservableObject {
 
             state = .uploading(progress: 0.4)
 
-            // 2. Upload file - detect local vs S3 mode
+            // 2. Upload file — respect backend-provided method
             let uploadURL = uploadInfo.upload.url
             let isLocalUpload = uploadURL.hasPrefix("/")
+            let uploadMethod = uploadInfo.upload.method.uppercased()
+            print("[PHOTO] Upload target: method=\(uploadMethod), local=\(isLocalUpload), fields=\(uploadInfo.upload.fields.keys.sorted()), url=\(uploadURL.prefix(60))")
 
             if isLocalUpload {
                 // Dev mode: upload to backend directly with Bearer auth
@@ -144,14 +146,22 @@ final class ProfilePhotoUploader: ObservableObject {
                     contentType: contentType,
                     fileName: "avatar.jpg"
                 )
-            } else {
-                // Production: upload to S3 with presigned fields
+            } else if uploadMethod == "POST" && !uploadInfo.upload.fields.isEmpty {
+                // Presigned S3 POST (multipart/form-data with returned fields)
                 _ = try await APIClient.shared.uploadToS3(
                     url: uploadURL,
                     fields: uploadInfo.upload.fields,
                     fileData: imageData,
                     contentType: contentType,
-                    fileName: "avatar.jpg"
+                    fileName: "avatar.jpg",
+                    orderedFields: uploadInfo.upload.orderedFields
+                )
+            } else {
+                // Presigned S3 PUT (raw body upload) — default for production
+                _ = try await APIClient.shared.uploadToS3Put(
+                    url: uploadURL,
+                    fileData: imageData,
+                    contentType: contentType
                 )
             }
 
@@ -176,7 +186,21 @@ final class ProfilePhotoUploader: ObservableObject {
             }
 
         } catch let appError as AppError {
-            state = .error(appError.errorDescription ?? "Upload failed. Please try again.")
+            if case .network(let underlying) = appError,
+               let urlError = underlying as? URLError {
+                switch urlError.code {
+                case .timedOut:
+                    state = .error("Upload timed out. Please try again on a stable connection.")
+                case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+                    state = .error("Upload host is unreachable. Please try again in a moment.")
+                case .notConnectedToInternet:
+                    state = .error("No internet connection. Please check your network and try again.")
+                default:
+                    state = .error("Network error during upload. Please try again.")
+                }
+            } else {
+                state = .error(appError.errorDescription ?? "Upload failed. Please try again.")
+            }
         } catch {
             state = .error("Upload failed. Please try again.")
         }
@@ -194,7 +218,7 @@ final class ProfilePhotoUploader: ObservableObject {
             while !Task.isCancelled {
                 let elapsed = Date().timeIntervalSince(start)
                 guard elapsed < maxPollingDuration else {
-                    state = .error("Photo processing timed out. Please try again later.")
+                    state = .error("Photo is still processing — it may appear shortly. Restart the app if it doesn't show.")
                     return
                 }
 
@@ -241,20 +265,32 @@ final class ProfilePhotoUploader: ObservableObject {
 
     private func detectContentType(data: Data) -> String {
         guard data.count >= 4 else { return "application/octet-stream" }
-        var header = [UInt8](repeating: 0, count: 4)
-        data.copyBytes(to: &header, count: 4)
+        var header4 = [UInt8](repeating: 0, count: 4)
+        data.copyBytes(to: &header4, count: 4)
 
         // JPEG: FF D8 FF
-        if header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
+        if header4[0] == 0xFF && header4[1] == 0xD8 && header4[2] == 0xFF {
             return "image/jpeg"
         }
         // PNG: 89 50 4E 47
-        if header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 {
+        if header4[0] == 0x89 && header4[1] == 0x50 && header4[2] == 0x4E && header4[3] == 0x47 {
             return "image/png"
         }
         // WebP: RIFF....WEBP
-        if header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46 {
+        if header4[0] == 0x52 && header4[1] == 0x49 && header4[2] == 0x46 && header4[3] == 0x46 {
             return "image/webp"
+        }
+        // HEIC/HEIF: ISO BMFF brand in ftyp box at bytes [4...11]
+        if data.count >= 12 {
+            var header12 = [UInt8](repeating: 0, count: 12)
+            data.copyBytes(to: &header12, count: 12)
+            if header12[4] == 0x66 && header12[5] == 0x74 && header12[6] == 0x79 && header12[7] == 0x70 {
+                let brand = String(bytes: Array(header12[8...11]), encoding: .ascii) ?? ""
+                let heicBrands: Set<String> = ["heic", "heix", "hevc", "hevx"]
+                let heifBrands: Set<String> = ["mif1", "msf1"]
+                if heicBrands.contains(brand) { return "image/heic" }
+                if heifBrands.contains(brand) { return "image/heif" }
+            }
         }
         return "application/octet-stream"
     }

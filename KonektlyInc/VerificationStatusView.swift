@@ -23,6 +23,18 @@ struct VerificationStatusView: View {
     @State private var pendingImage: UIImage?
     @State private var pendingImageData: Data?
     @State private var showTerms = false
+    @State private var showPrivacy = false
+    @State private var showBlockedUsers = false
+    @State private var showNotificationPrefs = false
+    @State private var showDeleteAccount = false
+    @State private var showDataExport = false
+    @State private var showSignOutConfirm = false
+    @State private var showEditProfile = false
+    @State private var showEditBusinessProfile = false
+    @State private var showHistory = false
+    @State private var showReviewPrompt = false
+    @State private var reviewJob: PendingReviewJob?
+    @StateObject private var reviewStore = ReviewStore.shared
 
     private var user: AuthUser? { authStore.currentUser }
     private var status: ProfileStatus? { authStore.profileStatus }
@@ -45,10 +57,13 @@ struct VerificationStatusView: View {
                         .padding(.top, Theme.Spacing.xl)
                         .padding(.bottom, Theme.Spacing.xxl)
 
-                    // Quick action cards
-                    quickActions
-                        .padding(.horizontal, Theme.Spacing.xl)
-                        .padding(.bottom, Theme.Spacing.xxl)
+                    // Profile completeness (workers only)
+                    if authStore.selectedRole == .worker {
+                        ProfileCompletenessView()
+                            .environmentObject(authStore)
+                            .padding(.horizontal, Theme.Spacing.xl)
+                            .padding(.bottom, Theme.Spacing.xxl)
+                    }
 
                     // Menu list
                     menuList
@@ -59,6 +74,31 @@ struct VerificationStatusView: View {
             .refreshable { await refresh() }
             .navigationDestination(isPresented: $showTerms) {
                 TermsReadView()
+            }
+            .navigationDestination(isPresented: $showPrivacy) {
+                PrivacyReadView()
+            }
+            .navigationDestination(isPresented: $showBlockedUsers) {
+                BlockedUsersView()
+            }
+            .navigationDestination(isPresented: $showNotificationPrefs) {
+                NotificationPreferencesView()
+            }
+            .navigationDestination(isPresented: $showDeleteAccount) {
+                DeleteAccountView()
+            }
+            .navigationDestination(isPresented: $showDataExport) {
+                DataExportView()
+            }
+            .navigationDestination(isPresented: $showEditProfile) {
+                EditProfileView()
+            }
+            .navigationDestination(isPresented: $showEditBusinessProfile) {
+                EditBusinessProfileView()
+                    .environmentObject(authStore)
+            }
+            .navigationDestination(isPresented: $showHistory) {
+                ShiftsView()
             }
             .overlay(alignment: .top) {
                 // Photo upload error/success banner
@@ -94,6 +134,17 @@ struct VerificationStatusView: View {
                         }
                 }
             }
+            .sheet(isPresented: $showReviewPrompt) {
+                if let job = reviewJob {
+                    ReviewPromptView(
+                        jobId: job.id,
+                        otherUserName: job.otherUserName,
+                        otherUserPhotoUrl: job.otherUserPhotoUrl,
+                        jobTitle: job.title,
+                        onDismiss: { showReviewPrompt = false; reviewJob = nil }
+                    )
+                }
+            }
             .sheet(isPresented: $showSubscription) {
                 NavigationStack {
                     SubscriptionView()
@@ -113,18 +164,37 @@ struct VerificationStatusView: View {
     // MARK: - Header
 
     private var headerSection: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text(displayName)
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundColor(Theme.Colors.primaryText)
+        VStack(spacing: Theme.Spacing.md) {
+            // Avatar on top - clickable to upload
+            avatarView
+
+            // Name below avatar
+            Text(displayName)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(Theme.Colors.primaryText)
+
+            // Phone number subtitle
+            if let phone = user?.phone, !phone.isEmpty,
+               displayName != phone {
+                Text(phone)
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.secondaryText)
             }
 
-            Spacer()
-
-            // Avatar - clickable to upload
-            avatarView
+            // Rating (from worker_profile or business_profile)
+            if authStore.selectedRole == .worker,
+               let dict = user?.workerProfile?.value as? [String: AnyCodable] {
+                let avgRating = dict["avg_rating"]?.value as? String
+                let reviewCount = dict["review_count"]?.value as? Int ?? 0
+                StarRatingView(avgRating: avgRating, reviewCount: reviewCount)
+            } else if authStore.selectedRole == .business,
+                      let dict = user?.businessProfile?.value as? [String: AnyCodable] {
+                let avgRating = dict["avg_rating"]?.value as? String
+                let reviewCount = dict["review_count"]?.value as? Int ?? 0
+                StarRatingView(avgRating: avgRating, reviewCount: reviewCount)
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Avatar
@@ -143,7 +213,8 @@ struct VerificationStatusView: View {
             AvatarImageView(
                 previewImage: previewImg,
                 photoURL: photoURL,
-                isUploading: isUploading
+                isUploading: isUploading,
+                size: 80
             )
         }
         .disabled(isUploading)
@@ -221,7 +292,7 @@ struct VerificationStatusView: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(Theme.Colors.primaryText)
+                        .background(Theme.Colors.buttonPrimary)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
@@ -262,21 +333,29 @@ struct VerificationStatusView: View {
         }
     }
 
-    // MARK: - Quick Actions
-
-    private var quickActions: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            QuickActionCard(icon: "briefcase.fill", label: "Shifts") {}
-            QuickActionCard(icon: "wallet.bifold.fill", label: "Wallet") {}
-            QuickActionCard(icon: "doc.text.fill", label: "History") {}
-        }
-    }
-
     // MARK: - Menu List
 
     private var menuList: some View {
         VStack(spacing: 0) {
-            // Verification section
+            // ── Account ──
+
+            sectionHeader("Account")
+
+            // Profile
+            ProfileMenuItem(
+                icon: authStore.selectedRole == .worker ? "person.fill" : "building.2.fill",
+                title: authStore.selectedRole == .worker ? "Edit Profile" : "Business Profile",
+                subtitle: authStore.selectedRole == .worker ? "Headline, bio, skills & more" : "Company bio, logo & details"
+            ) {
+                if authStore.selectedRole == .worker {
+                    showEditProfile = true
+                } else {
+                    showEditBusinessProfile = true
+                }
+            }
+            menuDivider
+
+            // Verification (only if not approved)
             if let status = status {
                 let role = authStore.selectedRole
                 let profileStatus = role == .worker ? status.workerStatus : status.businessStatus
@@ -291,7 +370,7 @@ struct VerificationStatusView: View {
                 }
             }
 
-            // Email verification
+            // Email
             ProfileMenuItem(
                 icon: "envelope.fill",
                 title: "Email",
@@ -303,33 +382,38 @@ struct VerificationStatusView: View {
             }
             menuDivider
 
-            // Konektly+ subscription row
+            // Konektly+ subscription
             SubscriptionMenuItem(isActive: subscriptionManager.isKonektlyPlus) {
                 showSubscription = true
             }
-            menuDivider
 
-            // Profile type
+            // ── Activity ──
+
+            sectionHeader("Activity")
+
             ProfileMenuItem(
-                icon: authStore.selectedRole == .worker ? "person.fill" : "building.2.fill",
-                title: authStore.selectedRole == .worker ? "Worker Profile" : "Business Profile",
-                subtitle: "Manage your profile details"
-            ) {}
-            menuDivider
+                icon: "clock.arrow.circlepath",
+                title: "History",
+                subtitle: "View your shift history"
+            ) {
+                showHistory = true
+            }
+
+            // ── Notifications ──
+
+            sectionHeader("Notifications")
 
             ProfileMenuItem(
                 icon: "bell.fill",
                 title: "Notifications",
                 subtitle: "Manage your alerts"
-            ) {}
-            menuDivider
+            ) {
+                showNotificationPrefs = true
+            }
 
-            ProfileMenuItem(
-                icon: "questionmark.circle.fill",
-                title: "Help",
-                subtitle: nil
-            ) {}
-            menuDivider
+            // ── Legal ──
+
+            sectionHeader("Legal")
 
             ProfileMenuItem(
                 icon: "doc.text.fill",
@@ -341,32 +425,83 @@ struct VerificationStatusView: View {
             menuDivider
 
             ProfileMenuItem(
-                icon: "gearshape.fill",
-                title: "Settings",
+                icon: "hand.raised.fill",
+                title: "Privacy Policy",
+                subtitle: nil
+            ) {
+                showPrivacy = true
+            }
+
+            // ── Privacy & Data ──
+
+            sectionHeader("Privacy & Data")
+
+            ProfileMenuItem(
+                icon: "square.and.arrow.down",
+                title: "Export My Data",
+                subtitle: "Download a copy of your data"
+            ) {
+                showDataExport = true
+            }
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "trash",
+                title: "Delete Account",
+                subtitle: "Permanently delete your account"
+            ) {
+                showDeleteAccount = true
+            }
+
+            // ── Support ──
+
+            sectionHeader("Support")
+
+            ProfileMenuItem(
+                icon: "questionmark.circle.fill",
+                title: "Help",
                 subtitle: nil
             ) {}
             menuDivider
 
-            // Sign out
-            Button(action: { authStore.signOut() }) {
-                HStack(spacing: Theme.Spacing.lg) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 20))
-                        .foregroundColor(Theme.Colors.error)
-                        .frame(width: 28)
-
-                    Text("Sign Out")
-                        .font(Theme.Typography.body)
-                        .foregroundColor(Theme.Colors.error)
-
-                    Spacer()
-                }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.vertical, Theme.Spacing.lg)
-                .contentShape(Rectangle())
+            ProfileMenuItem(
+                icon: "hand.raised.fill",
+                title: "Blocked Users",
+                subtitle: nil
+            ) {
+                showBlockedUsers = true
             }
-            .buttonStyle(.plain)
+
+            // ── Sign Out ──
+
+            menuDivider
+
+            ProfileMenuItem(
+                icon: "rectangle.portrait.and.arrow.right",
+                title: "Sign Out",
+                subtitle: nil
+            ) {
+                showSignOutConfirm = true
+            }
+            .alert("Sign Out", isPresented: $showSignOutConfirm) {
+                Button("Sign Out", role: .destructive) {
+                    authStore.signOut()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to sign out?")
+            }
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(Theme.Colors.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.sm)
     }
 
     private var menuDivider: some View {
@@ -406,6 +541,7 @@ struct VerificationStatusView: View {
         defer { isRefreshing = false }
         await authStore.loadProfileStatus()
         await authStore.loadCurrentUser()
+        await reviewStore.loadPendingReviews()
         // Only clear preview if backend says no photo exists (deleted/none)
         if authStore.currentUser?.profilePhoto == nil {
             photoUploader.previewImage = nil
@@ -426,10 +562,14 @@ struct AvatarImageView: View {
     let previewImage: UIImage?
     let photoURL: URL?
     let isUploading: Bool
+    var size: CGFloat = 60
 
     @State private var loadedImage: UIImage?
     @State private var loadFailed = false
     @State private var lastLoadedURL: URL?
+
+    private var badgeOffset: CGFloat { size * 0.37 }
+    private var badgeSize: CGFloat { max(10, size * 0.17) }
 
     var body: some View {
         ZStack {
@@ -437,17 +577,17 @@ struct AvatarImageView: View {
                 Image(uiImage: preview)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 60, height: 60)
+                    .frame(width: size, height: size)
                     .clipShape(Circle())
             } else if let loaded = loadedImage {
                 Image(uiImage: loaded)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 60, height: 60)
+                    .frame(width: size, height: size)
                     .clipShape(Circle())
             } else if photoURL != nil && !loadFailed {
                 ProgressView()
-                    .frame(width: 60, height: 60)
+                    .frame(width: size, height: size)
             } else {
                 placeholderCircle
             }
@@ -455,19 +595,19 @@ struct AvatarImageView: View {
             if isUploading {
                 Circle()
                     .fill(Color.black.opacity(0.4))
-                    .frame(width: 60, height: 60)
+                    .frame(width: size, height: size)
                 ProgressView()
                     .tint(.white)
             }
 
             if !isUploading {
                 Image(systemName: "camera.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: badgeSize, weight: .semibold))
                     .foregroundColor(.white)
                     .padding(4)
                     .background(Color.black)
                     .clipShape(Circle())
-                    .offset(x: 22, y: 22)
+                    .offset(x: badgeOffset, y: badgeOffset)
             }
         }
         .task(id: photoURL) {
@@ -498,8 +638,9 @@ struct AvatarImageView: View {
 
         do {
             var request = URLRequest(url: url)
-            // Add auth header in case backend requires it for media
-            if let token = TokenStore.shared.accessToken {
+            // Add auth header only for backend-hosted media URLs.
+            // Do not send JWT to third-party hosts (e.g. S3/CDN presigned URLs).
+            if url.host == Config.apiBaseURL.host, let token = TokenStore.shared.accessToken {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -530,37 +671,11 @@ struct AvatarImageView: View {
         ZStack {
             Circle()
                 .fill(Color(UIColor.systemGray5))
-                .frame(width: 60, height: 60)
+                .frame(width: size, height: size)
             Image(systemName: "person.fill")
-                .font(.system(size: 28))
+                .font(.system(size: size * 0.47))
                 .foregroundColor(Color(UIColor.systemGray2))
         }
-    }
-}
-
-// MARK: - Quick Action Card
-
-struct QuickActionCard: View {
-    let icon: String
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundColor(Theme.Colors.primaryText)
-                Text(label)
-                    .font(Theme.Typography.caption)
-                    .foregroundColor(Theme.Colors.primaryText)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Theme.Spacing.lg)
-            .background(Color(UIColor.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
-        }
-        .buttonStyle(.plain)
     }
 }
 

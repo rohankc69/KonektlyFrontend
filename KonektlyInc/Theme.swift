@@ -39,9 +39,20 @@ struct Theme {
         static let border = Color(UIColor.separator)
         static let divider = Color(UIColor.separator)
         
-        // Input field background (light blue-gray like Uber)
-        static let inputBackground = Color(red: 0.93, green: 0.94, blue: 0.97)
+        // Input field background — adaptive for dark mode
+        static let inputBackground = Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? .tertiarySystemBackground
+                : UIColor(red: 0.93, green: 0.94, blue: 0.97, alpha: 1)
+        })
         static let inputBorderFocused = Color(red: 0.22, green: 0.35, blue: 0.96)
+
+        // Solid button background — always supports white text
+        static let buttonPrimary = Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.22, green: 0.35, blue: 0.96, alpha: 1) // accent blue
+                : UIColor.label // black
+        })
         
         // Map overlay colors
         static let mapOverlayBackground = Color(UIColor.systemBackground).opacity(0.95)
@@ -113,8 +124,8 @@ struct Theme {
     // MARK: - Sizes
     struct Sizes {
         // Button heights
-        static let buttonHeight: CGFloat = 52
-        static let smallButtonHeight: CGFloat = 40
+        static let buttonHeight: CGFloat = 58
+        static let smallButtonHeight: CGFloat = 46
         
         // Avatar sizes
         static let avatarSmall: CGFloat = 32
@@ -143,14 +154,14 @@ struct Theme {
 
 struct PrimaryButtonStyle: ViewModifier {
     let isEnabled: Bool
-    
+
     func body(content: Content) -> some View {
         content
             .font(Theme.Typography.headlineSemibold)
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .frame(height: Theme.Sizes.buttonHeight)
-            .background(isEnabled ? Theme.Colors.primary : Theme.Colors.primary.opacity(0.5))
+            .background(isEnabled ? Theme.Colors.buttonPrimary : Theme.Colors.buttonPrimary.opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
             .shadow(
                 color: Theme.Shadows.small.color,
@@ -168,7 +179,7 @@ struct SecondaryButtonStyle: ViewModifier {
             .foregroundColor(Theme.Colors.primary)
             .frame(maxWidth: .infinity)
             .frame(height: Theme.Sizes.buttonHeight)
-            .background(Color.white)
+            .background(Theme.Colors.secondaryBackground)
             .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.medium))
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.CornerRadius.medium)

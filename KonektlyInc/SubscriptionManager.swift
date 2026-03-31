@@ -15,11 +15,12 @@ final class SubscriptionManager: ObservableObject {
     static let shared = SubscriptionManager()
     
     // Product ID must match what's in App Store Connect + backend APPLE_PRODUCT_ID_KONEKTLY_PLUS
-    private let productID = "com.konektly.plus.monthly"
+    private let productID = "com.konektly.app.konektlyplus.monthly"
     
     @Published var subscriptionStatus: SubscriptionStatus?
     @Published var storeKitProduct: Product?
     @Published var isPurchasing = false
+    @Published var isLoadingProduct = false
     @Published var error: String?
     
     private var transactionListener: Task<Void, Never>?
@@ -39,10 +40,22 @@ final class SubscriptionManager: ObservableObject {
     // MARK: - Load product from App Store
     
     func loadProduct() async {
+        guard !isLoadingProduct else { return }
+        isLoadingProduct = true
+        defer { isLoadingProduct = false }
+        print("[SUB] Loading products (APPLE_MODE=\(Config.appleMode.rawValue))")
         do {
             let products = try await Product.products(for: [productID])
-            storeKitProduct = products.first
+            guard let product = products.first else {
+                print("[SUB] No StoreKit product returned for productID=\(productID) (APPLE_MODE=\(Config.appleMode.rawValue))")
+                self.error = "Subscription product not found. Check App Store Connect configuration."
+                return
+            }
+            storeKitProduct = product
+            self.error = nil
+            print("[SUB] Product loaded (id=\(product.id), price=\(product.displayPrice), APPLE_MODE=\(Config.appleMode.rawValue))")
         } catch {
+            print("[SUB] Product load failed (APPLE_MODE=\(Config.appleMode.rawValue), error=\(error.localizedDescription))")
             self.error = "Could not load subscription details."
         }
     }
@@ -59,12 +72,30 @@ final class SubscriptionManager: ObservableObject {
             switch result {
             case .success(let verification):
                 let transaction = try checkVerified(verification)
-                await sendToBackend(verification: verification)
-                await transaction.finish()
+                let jwsTransaction = verification.jwsRepresentation
+
+                do {
+                    try await validateAndRefreshFromBackend(
+                        jwsTransaction: jwsTransaction,
+                        source: "purchase"
+                    )
+                    await transaction.finish()
+                    print("[SUB] Purchase synced + finished (APPLE_MODE=\(Config.appleMode.rawValue))")
+                } catch {
+                    handleSubscriptionSyncFailure(
+                        error,
+                        source: "purchase",
+                        showUserMessage: true
+                    )
+                    // Do NOT finish on sync failure. Leaving it unfinished lets
+                    // StoreKit re-deliver via Transaction.updates for retry.
+                }
             case .userCancelled:
+                print("[SUB] Purchase cancelled by user (APPLE_MODE=\(Config.appleMode.rawValue))")
                 break
             case .pending:
                 // Payment pending (e.g. Ask to Buy) - wait for listenForTransactions
+                print("[SUB] Purchase pending (APPLE_MODE=\(Config.appleMode.rawValue))")
                 break
             @unknown default:
                 break
@@ -74,24 +105,23 @@ final class SubscriptionManager: ObservableObject {
         }
     }
     
-    // MARK: - Send verified transaction to backend
+    // MARK: - Backend sync (source of truth = /subscriptions/me/)
 
-    // Accepts VerificationResult<Transaction> because jwsRepresentation is on the
-    // wrapper, not on the unwrapped Transaction. The caller holds the Transaction
-    // for finish().
-    private func sendToBackend(verification: VerificationResult<Transaction>) async {
-        let jws = verification.jwsRepresentation
-        do {
-            let status = try await APIClient.shared.validateAppleTransaction(
-                jwsTransaction: jws
-            )
-            self.subscriptionStatus = status
-        } catch {
-            // Transaction is valid with Apple but backend call failed.
-            // Retry on next app launch via refreshSubscriptionStatus().
-            self.error = "Purchase successful — syncing your account. Please wait."
-            await refreshSubscriptionStatus()
-        }
+    private func validateAndRefreshFromBackend(
+        jwsTransaction: String,
+        source: String
+    ) async throws {
+        let mode = Config.appleMode.rawValue
+        print("[SUB] Validate start (APPLE_MODE=\(mode), source=\(source))")
+
+        _ = try await APIClient.shared.validateAppleTransaction(
+            jwsTransaction: jwsTransaction
+        )
+        print("[SUB] Validate success (APPLE_MODE=\(mode), source=\(source))")
+
+        let backendStatus = try await APIClient.shared.fetchSubscriptionStatus()
+        subscriptionStatus = backendStatus
+        print("[SUB] Status refresh success (APPLE_MODE=\(mode), source=\(source), plan=\(backendStatus.plan), status=\(backendStatus.status), plus=\(backendStatus.isKonektlyPlus))")
     }
     
     // MARK: - Listen for background transactions (renewals, restored purchases)
@@ -101,10 +131,18 @@ final class SubscriptionManager: ObservableObject {
             for await result in Transaction.updates {
                 do {
                     let transaction = try checkVerified(result)
-                    await sendToBackend(verification: result)
+                    try await validateAndRefreshFromBackend(
+                        jwsTransaction: result.jwsRepresentation,
+                        source: "transaction_update"
+                    )
                     await transaction.finish()
+                    print("[SUB] Update synced + finished (APPLE_MODE=\(Config.appleMode.rawValue))")
                 } catch {
-                    // Invalid transaction from Apple — ignore unverified
+                    handleSubscriptionSyncFailure(
+                        error,
+                        source: "transaction_update",
+                        showUserMessage: false
+                    )
                 }
             }
         }
@@ -164,6 +202,39 @@ final class SubscriptionManager: ObservableObject {
     
     var displayPrice: String {
         storeKitProduct?.displayPrice ?? ""
+    }
+
+    // MARK: - Error Mapping
+
+    private func handleSubscriptionSyncFailure(
+        _ error: Error,
+        source: String,
+        showUserMessage: Bool
+    ) {
+        let mode = Config.appleMode.rawValue
+        let message: String
+
+        switch error {
+        case AppError.unauthorized:
+            message = "Session expired. Please sign in again."
+            print("[SUB] Sync failed unauthorized (APPLE_MODE=\(mode), source=\(source))")
+        case AppError.network:
+            message = "Purchase succeeded, but we couldn't reach the server. We'll retry shortly."
+            print("[SUB] Sync failed network (APPLE_MODE=\(mode), source=\(source))")
+        case AppError.apiError(let code, _):
+            message = "Purchase received, but validation failed (\(code.rawValue)). Please try again."
+            print("[SUB] Sync failed API error (APPLE_MODE=\(mode), source=\(source), code=\(code.rawValue))")
+        case AppError.decoding:
+            message = "Purchase received, but server response was unexpected. Please try again."
+            print("[SUB] Sync failed decode (APPLE_MODE=\(mode), source=\(source))")
+        default:
+            message = "Purchase received, but we couldn't sync your subscription yet."
+            print("[SUB] Sync failed unknown (APPLE_MODE=\(mode), source=\(source), error=\(String(describing: error)))")
+        }
+
+        if showUserMessage {
+            self.error = message
+        }
     }
 }
 

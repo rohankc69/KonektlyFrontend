@@ -95,9 +95,56 @@ actor APIClient {
         return URLSession(configuration: config)
     }()
 
+    /// Treat task/URLSession cancellations separately so UI layers can ignore
+    /// expected refresh cancellations instead of showing a network error.
+    private nonisolated func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // Accept both ISO8601 variants from backend:
+        // - 2026-03-30T18:00:00Z
+        // - 2026-03-30T18:00:00.123456Z
+        d.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+
+            let isoParsers: [ISO8601DateFormatter] = {
+                let withFractional = ISO8601DateFormatter()
+                withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let plain = ISO8601DateFormatter()
+                plain.formatOptions = [.withInternetDateTime]
+                return [withFractional, plain]
+            }()
+            for parser in isoParsers {
+                if let date = parser.date(from: raw) { return date }
+            }
+
+            // Handle extended fractional precision with explicit timezone offset,
+            // e.g. 2026-03-30T05:13:05.297673+00:00
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            let formats = [
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX",
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSXXXXX",
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSXXXXX",
+                "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX",
+                "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+            ]
+            for format in formats {
+                df.dateFormat = format
+                if let date = df.date(from: raw) { return date }
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO8601 date: \(raw)"
+            )
+        }
         return d
     }()
 
@@ -144,7 +191,8 @@ actor APIClient {
         fields: [String: String],
         fileData: Data,
         contentType: String,
-        fileName: String
+        fileName: String,
+        orderedFields: [(key: String, value: String)]? = nil
     ) async throws -> Int {
         guard let uploadURL = URL(string: url) else { throw AppError.unknown }
 
@@ -156,17 +204,23 @@ actor APIClient {
 
         var body = Data()
 
-        // Add all presigned fields first
-        for (key, value) in fields {
+        // Add all presigned fields first — use ordered list if available (S3 cares about order)
+        let fieldPairs: [(key: String, value: String)] = orderedFields ?? fields.map { ($0.key, $0.value) }
+        for (key, value) in fieldPairs {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
             body.append("\(value)\r\n".data(using: .utf8)!)
         }
 
-        // Append file as the last field (required by S3)
+        // Append file as the last field (required by S3).
+        // Use the Content-Type from the signed policy fields when present — mismatching
+        // the value the backend signed causes an immediate S3 SignatureDoesNotMatch 403.
+        let signedContentType = fieldPairs.first(where: {
+            $0.key.lowercased() == "content-type"
+        })?.value ?? contentType
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(signedContentType)\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
@@ -175,15 +229,26 @@ actor APIClient {
 
         print("[API] [POST S3] \(url) (\(fileData.count) bytes)")
 
-        let (_, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            print("[API] [POST S3] transport error for \(uploadURL.absoluteString): \(error)")
+            throw AppError.network(underlying: error)
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppError.unknown
         }
 
         print("[API] S3 upload status: \(httpResponse.statusCode)")
 
-        guard httpResponse.statusCode == 201 || httpResponse.statusCode == 204 else {
-            throw AppError.apiError(code: .uploadFailed, message: "S3 upload returned \(httpResponse.statusCode)")
+        // S3 presigned POST returns 200 (default), 201 (if success_action_status=201),
+        // or 204 (if success_action_status=204).
+        guard (200...204).contains(httpResponse.statusCode) else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "(no body)"
+            print("[API] S3 upload failed — status \(httpResponse.statusCode), body: \(responseBody.prefix(500))")
+            throw AppError.apiError(code: .uploadFailed, message: uploadFailureMessage(statusCode: httpResponse.statusCode))
         }
 
         return httpResponse.statusCode
@@ -229,7 +294,13 @@ actor APIClient {
 
         print("[API] [POST LOCAL] \(url.absoluteString) (\(fileData.count) bytes)")
 
-        let (_, response) = try await session.data(for: request)
+        let response: URLResponse
+        do {
+            (_, response) = try await session.data(for: request)
+        } catch {
+            print("[API] [POST LOCAL] transport error for \(url.absoluteString): \(error)")
+            throw AppError.network(underlying: error)
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppError.unknown
         }
@@ -237,17 +308,93 @@ actor APIClient {
         print("[API] Local upload status: \(httpResponse.statusCode)")
 
         guard (200...204).contains(httpResponse.statusCode) else {
-            throw AppError.apiError(code: .uploadFailed, message: "Local upload returned \(httpResponse.statusCode)")
+            throw AppError.apiError(code: .uploadFailed, message: uploadFailureMessage(statusCode: httpResponse.statusCode))
         }
 
         return httpResponse.statusCode
     }
 
+    /// Upload raw file data to S3 using a presigned PUT URL (no multipart).
+    /// Used by resume upload.
+    func uploadToS3Put(url: String, fileData: Data, contentType: String) async throws -> Int {
+        // Resolve relative URLs from dev backend by prepending apiBaseURL
+        let resolvedURL: URL
+        let isLocal: Bool
+        if url.hasPrefix("http://") || url.hasPrefix("https://") {
+            guard let parsed = URL(string: url) else { throw AppError.unknown }
+            resolvedURL = parsed
+            isLocal = false
+        } else {
+            let base = Config.apiBaseURL.absoluteString.hasSuffix("/")
+                ? String(Config.apiBaseURL.absoluteString.dropLast())
+                : Config.apiBaseURL.absoluteString
+            let path = url.hasPrefix("/") ? url : "/" + url
+            guard let parsed = URL(string: base + path) else { throw AppError.unknown }
+            resolvedURL = parsed
+            isLocal = true
+        }
+
+        var request = URLRequest(url: resolvedURL)
+        request.httpMethod = "PUT"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = fileData
+        request.timeoutInterval = 120
+
+        // Add auth header for local dev uploads (not S3)
+        if isLocal, let token = TokenStore.shared.accessToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        print("[API] [PUT S3] \(resolvedURL.absoluteString) (\(fileData.count) bytes)")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            print("[API] [PUT S3] transport error for \(resolvedURL.absoluteString): \(error)")
+            throw AppError.network(underlying: error)
+        }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.unknown
+        }
+
+        print("[API] S3 PUT upload status: \(httpResponse.statusCode)")
+
+        guard (200...204).contains(httpResponse.statusCode) else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "(no body)"
+            print("[API] S3 PUT failed — status \(httpResponse.statusCode), body: \(responseBody.prefix(500))")
+            throw AppError.apiError(code: .uploadFailed, message: uploadFailureMessage(statusCode: httpResponse.statusCode))
+        }
+        return httpResponse.statusCode
+    }
+
+    private nonisolated func uploadFailureMessage(statusCode: Int) -> String {
+        switch statusCode {
+        case 400:
+            return "Upload rejected (400). Please check file type and size."
+        case 409:
+            return "Upload conflict (409). Please refresh and try again."
+        case 429:
+            return "Too many upload attempts (429). Please wait and retry."
+        default:
+            return "Upload failed (HTTP \(statusCode)). Please try again."
+        }
+    }
+
     // MARK: - Build URLRequest
 
     private func buildRequest(endpoint: Endpoint, authenticated: Bool) throws -> URLRequest {
+        // Use URL(string:relativeTo:) to preserve trailing slashes on endpoint paths.
+        // appendingPathComponent(_:) silently strips trailing slashes, which causes
+        // Django to issue a 301 redirect for POST/PATCH requests, and URLSession
+        // follows those redirects with GET — resulting in 405 errors in production.
+        let base = Config.apiBaseURL.absoluteString.hasSuffix("/")
+            ? String(Config.apiBaseURL.absoluteString.dropLast())
+            : Config.apiBaseURL.absoluteString
+        let resolvedURL = URL(string: base + endpoint.path) ?? Config.apiBaseURL
         var components = URLComponents(
-            url: Config.apiBaseURL.appendingPathComponent(endpoint.path),
+            url: resolvedURL,
             resolvingAgainstBaseURL: true
         )
         if let queryItems = endpoint.queryItems {
@@ -269,6 +416,11 @@ actor APIClient {
         if authenticated, let token = TokenStore.shared.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+
+        if let key = endpoint.idempotencyKey {
+            request.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+        }
+
         return request
     }
 
@@ -287,6 +439,9 @@ actor APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            if isCancellation(error) {
+                throw CancellationError()
+            }
             print("[API] Network error for \(urlString): \(error)")
             throw AppError.network(underlying: error)
         }
@@ -313,7 +468,9 @@ actor APIClient {
                let errorPayload = envelope.error {
                 let code = APIErrorCode(rawValue: errorPayload.code) ?? .unknown
                 switch code {
-                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed:
+                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed,
+                     .alreadyReviewed, .reviewWindowExpired, .jobNotCompleted,
+                     .notAParticipant, .noCompletedShift, .maxExperiencesReached:
                     throw AppError.apiError(code: code, message: errorPayload.message)
                 default:
                     throw AppError.conflict(message: errorPayload.message)
@@ -359,6 +516,9 @@ actor APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            if isCancellation(error) {
+                throw CancellationError()
+            }
             print("[API] Network error for \(urlString): \(error)")
             throw AppError.network(underlying: error)
         }
@@ -383,7 +543,9 @@ actor APIClient {
                let errorPayload = envelope.error {
                 let code = APIErrorCode(rawValue: errorPayload.code) ?? .unknown
                 switch code {
-                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed:
+                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed,
+                     .alreadyReviewed, .reviewWindowExpired, .jobNotCompleted,
+                     .notAParticipant, .noCompletedShift, .maxExperiencesReached:
                     throw AppError.apiError(code: code, message: errorPayload.message)
                 default:
                     throw AppError.conflict(message: errorPayload.message)
@@ -570,12 +732,14 @@ nonisolated struct Endpoint: Sendable {
     let method: HTTPMethod
     let body: AnyEncodable?
     let queryItems: [URLQueryItem]?
+    let idempotencyKey: String?
 
-    init(path: String, method: HTTPMethod = .get, body: AnyEncodable? = nil, queryItems: [URLQueryItem]? = nil) {
+    init(path: String, method: HTTPMethod = .get, body: AnyEncodable? = nil, queryItems: [URLQueryItem]? = nil, idempotencyKey: String? = nil) {
         self.path = path
         self.method = method
         self.body = body
         self.queryItems = queryItems
+        self.idempotencyKey = idempotencyKey
     }
 }
 
@@ -588,6 +752,9 @@ nonisolated enum HTTPMethod: String, Sendable {
 }
 
 // MARK: - AnyEncodable (type-erasure for request bodies)
+
+/// Empty JSON body `{}` for endpoints that require a body but no fields.
+nonisolated struct EmptyBody: Encodable, Sendable {}
 
 nonisolated struct AnyEncodable: Encodable, @unchecked Sendable {
     private let _encode: (Encoder) throws -> Void
@@ -613,11 +780,6 @@ extension Endpoint {
     static func verifyOTPFirebase(phone: String, profileType: String, idToken: String) -> Endpoint {
         Endpoint(path: "/api/v1/auth/phone/verify-otp/", method: .post,
                  body: AnyEncodable(VerifyOTPFirebaseRequest(phone: phone, profile_type: profileType, id_token: idToken)))
-    }
-
-    static func verifyOTPDev(phone: String, profileType: String, code: String) -> Endpoint {
-        Endpoint(path: "/api/v1/auth/phone/verify-otp/", method: .post,
-                 body: AnyEncodable(VerifyOTPDevRequest(phone: phone, profile_type: profileType, code: code)))
     }
 
     static let me = Endpoint(path: "/api/v1/auth/me/", method: .get)
@@ -682,6 +844,11 @@ extension Endpoint {
     static let photoDelete = Endpoint(path: "/api/v1/auth/profile/photo/", method: .delete)
 
     // MARK: - Jobs Endpoints
+
+    /// GET /api/v1/jobs/{jobId}/ — Fetch a single job by ID
+    static func jobDetail(jobId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/jobs/\(jobId)/", method: .get)
+    }
 
     /// POST /api/v1/jobs/ — Business: post a new open job
     static func postJob(_ req: PostJobRequest) -> Endpoint {
@@ -766,4 +933,228 @@ extension Endpoint {
     
     /// GET /api/v1/subscriptions/me/
     static let subscriptionStatus = Endpoint(path: "/api/v1/subscriptions/me/", method: .get)
+
+    // MARK: - Messaging Endpoints
+
+    /// POST /api/v1/messages/conversations/start/ — Business starts pre-hire chat with an applicant
+    static func startConversation(_ req: StartConversationRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/conversations/start/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// GET /api/v1/messages/conversations/
+    static let conversations = Endpoint(path: "/api/v1/messages/conversations/", method: .get)
+
+    /// GET /api/v1/messages/conversations/<id>/
+    static func conversationMessages(conversationId: UUID, before: UUID? = nil) -> Endpoint {
+        var items: [URLQueryItem] = []
+        if let before { items.append(URLQueryItem(name: "before", value: before.uuidString.lowercased())) }
+        return Endpoint(
+            path: "/api/v1/messages/conversations/\(conversationId.uuidString.lowercased())/",
+            method: .get,
+            queryItems: items.isEmpty ? nil : items
+        )
+    }
+
+    /// GET /api/v1/messages/unread-count/
+    static let unreadCount = Endpoint(path: "/api/v1/messages/unread-count/", method: .get)
+
+    /// POST /api/v1/messages/devices/register/
+    static func registerDevice(_ req: DeviceRegisterRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/devices/register/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// POST /api/v1/messages/devices/unregister/
+    static func unregisterDevice(_ req: DeviceUnregisterRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/devices/unregister/", method: .post, body: AnyEncodable(req))
+    }
+
+    // MARK: - Block / Report Endpoints
+
+    /// POST /api/v1/users/<id>/block/
+    static func blockUser(userId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/users/\(userId)/block/", method: .post)
+    }
+
+    /// DELETE /api/v1/users/<id>/block/
+    static func unblockUser(userId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/users/\(userId)/block/", method: .delete)
+    }
+
+    /// GET /api/v1/users/blocked/
+    static let blockedUsers = Endpoint(path: "/api/v1/users/blocked/", method: .get)
+
+    /// POST /api/v1/messages/conversations/<uuid>/report/
+    static func reportConversation(conversationId: UUID, _ req: ReportRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/conversations/\(conversationId.uuidString.lowercased())/report/", method: .post, body: AnyEncodable(req))
+    }
+
+    // MARK: - Account Deletion
+
+    /// POST /api/v1/auth/account/delete/
+    static func deleteAccount(_ req: AccountDeleteRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/account/delete/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// GET /api/v1/auth/account/deletion-status/
+    static let deletionStatus = Endpoint(path: "/api/v1/auth/account/deletion-status/", method: .get)
+
+    // MARK: - Privacy Policy
+
+    /// GET /api/v1/legal/privacy/
+    static let currentPrivacy = Endpoint(path: "/api/v1/legal/privacy/", method: .get)
+
+    /// POST /api/v1/auth/privacy/accept/
+    static func acceptPrivacy(_ req: PrivacyAcceptRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/auth/privacy/accept/", method: .post, body: AnyEncodable(req))
+    }
+
+    // MARK: - Notification Preferences
+
+    /// GET /api/v1/notifications/preferences/
+    static let notificationPreferences = Endpoint(path: "/api/v1/notifications/preferences/", method: .get)
+
+    /// PATCH /api/v1/notifications/preferences/
+    static func updateNotificationPreferences(_ req: NotificationPreferencesUpdate) -> Endpoint {
+        Endpoint(path: "/api/v1/notifications/preferences/", method: .patch, body: AnyEncodable(req))
+    }
+
+    /// POST /api/v1/messages/conversations/<uuid>/mute/
+    static func muteConversation(conversationId: UUID, mutedUntil: String? = nil) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/conversations/\(conversationId.uuidString.lowercased())/mute/", method: .post,
+                 body: AnyEncodable(MuteConversationRequest(mutedUntil: mutedUntil)))
+    }
+
+    /// DELETE /api/v1/messages/conversations/<uuid>/mute/
+    static func unmuteConversation(conversationId: UUID) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/conversations/\(conversationId.uuidString.lowercased())/mute/", method: .delete)
+    }
+
+    // MARK: - Data Export
+
+    /// POST /api/v1/auth/account/export/
+    static let requestDataExport = Endpoint(path: "/api/v1/auth/account/export/", method: .post)
+
+    /// GET /api/v1/auth/account/export/status/
+    static let dataExportStatus = Endpoint(path: "/api/v1/auth/account/export/status/", method: .get)
+
+    // MARK: - Worker Profile Update
+
+    /// PATCH /api/v1/profiles/worker/update/
+    static func updateWorkerProfile(_ req: WorkerProfileUpdateRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/update/", method: .patch, body: AnyEncodable(req))
+    }
+
+    // MARK: - Skills Endpoints
+
+    /// GET /api/v1/skills/ — all active skills, optional search/category filters
+    static func allSkills(search: String? = nil, category: String? = nil) -> Endpoint {
+        var items: [URLQueryItem] = []
+        if let search, !search.isEmpty { items.append(URLQueryItem(name: "search", value: search)) }
+        if let category { items.append(URLQueryItem(name: "category", value: category)) }
+        return Endpoint(path: "/api/v1/skills/", method: .get, queryItems: items.isEmpty ? nil : items)
+    }
+
+    /// GET /api/v1/profiles/worker/skills/ — my current skills
+    static let mySkills = Endpoint(path: "/api/v1/profiles/worker/skills/", method: .get)
+
+    /// PUT /api/v1/profiles/worker/skills/ — replace all skills (atomic)
+    static func updateSkills(_ req: UpdateWorkerSkillsRequest, idempotencyKey: String) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/skills/", method: .put, body: AnyEncodable(req), idempotencyKey: idempotencyKey)
+    }
+
+    // MARK: - Experience Endpoints
+
+    /// GET /api/v1/profiles/worker/experience/
+    static let myExperiences = Endpoint(path: "/api/v1/profiles/worker/experience/", method: .get)
+
+    /// POST /api/v1/profiles/worker/experience/
+    static func addExperience(_ req: ExperienceRequest, idempotencyKey: String) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/experience/", method: .post, body: AnyEncodable(req), idempotencyKey: idempotencyKey)
+    }
+
+    /// PATCH /api/v1/profiles/worker/experience/<id>/
+    static func updateExperience(id: Int, _ req: ExperienceRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/experience/\(id)/", method: .patch, body: AnyEncodable(req))
+    }
+
+    /// DELETE /api/v1/profiles/worker/experience/<id>/
+    static func deleteExperience(id: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/experience/\(id)/", method: .delete)
+    }
+
+    // MARK: - Availability Endpoints
+
+    /// GET /api/v1/profiles/worker/availability/
+    static let myAvailability = Endpoint(path: "/api/v1/profiles/worker/availability/", method: .get)
+
+    /// PUT /api/v1/profiles/worker/availability/
+    static func updateAvailability(_ req: UpdateAvailabilityRequest, idempotencyKey: String) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/availability/", method: .put, body: AnyEncodable(req), idempotencyKey: idempotencyKey)
+    }
+
+    // MARK: - Resume Endpoints
+
+    /// POST /api/v1/profiles/worker/resume/upload-url/
+    static func resumeUploadURL(_ req: ResumeUploadURLRequest, idempotencyKey: String) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/resume/upload-url/", method: .post, body: AnyEncodable(req), idempotencyKey: idempotencyKey)
+    }
+
+    /// POST /api/v1/profiles/worker/resume/confirm/ — empty body per backend spec
+    static let resumeConfirm = Endpoint(path: "/api/v1/profiles/worker/resume/confirm/", method: .post, body: AnyEncodable(EmptyBody()))
+
+    /// GET /api/v1/profiles/worker/resume/ — check current resume status
+    static let resumeStatus = Endpoint(path: "/api/v1/profiles/worker/resume/", method: .get)
+
+    /// DELETE /api/v1/profiles/worker/resume/
+    static let resumeDelete = Endpoint(path: "/api/v1/profiles/worker/resume/", method: .delete)
+
+    // MARK: - Reviews Endpoints
+
+    /// POST /api/v1/reviews/
+    static func submitReview(_ req: ReviewRequest, idempotencyKey: String) -> Endpoint {
+        Endpoint(path: "/api/v1/reviews/", method: .post, body: AnyEncodable(req), idempotencyKey: idempotencyKey)
+    }
+
+    /// GET /api/v1/reviews/pending/
+    static let pendingReviews = Endpoint(path: "/api/v1/reviews/pending/", method: .get)
+
+    /// GET /api/v1/reviews/user/<user_id>/
+    static func userReviews(userId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/reviews/user/\(userId)/", method: .get)
+    }
+
+    /// GET /api/v1/reviews/mine/
+    static let myReviews = Endpoint(path: "/api/v1/reviews/mine/", method: .get)
+
+    // MARK: - Public Worker Profile
+
+    /// GET /api/v1/profiles/worker/<user_id>/public/
+    static func publicWorkerProfile(userId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/worker/\(userId)/public/", method: .get)
+    }
+
+    // MARK: - Business Profile Endpoints
+
+    /// PATCH /api/v1/profiles/business/update/
+    static func updateBusinessProfile(_ req: BusinessProfileUpdateRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/business/update/", method: .patch, body: AnyEncodable(req))
+    }
+
+    /// POST /api/v1/profiles/business/logo/upload-url/
+    static func businessLogoUploadURL(_ req: LogoUploadURLRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/business/logo/upload-url/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// POST /api/v1/profiles/business/logo/confirm/ — empty body per backend spec
+    static let businessLogoConfirm = Endpoint(
+        path: "/api/v1/profiles/business/logo/confirm/", method: .post, body: AnyEncodable(EmptyBody())
+    )
+
+    /// DELETE /api/v1/profiles/business/logo/
+    static let deleteBusinessLogo = Endpoint(path: "/api/v1/profiles/business/logo/", method: .delete)
+
+    /// GET /api/v1/profiles/business/<user_id>/public/
+    static func publicBusinessProfile(userId: Int) -> Endpoint {
+        Endpoint(path: "/api/v1/profiles/business/\(userId)/public/", method: .get)
+    }
 }

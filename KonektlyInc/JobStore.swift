@@ -38,6 +38,9 @@ enum JobStoreError: LocalizedError, Equatable {
     }
 
     static func from(_ appError: AppError) -> JobStoreError {
+        if case .decoding = appError {
+            return .general("We couldn't read the latest jobs data. Please try again.")
+        }
         if case .apiError(let code, let message) = appError {
             switch code {
             case .alreadyApplied:                return .alreadyApplied
@@ -109,6 +112,9 @@ final class JobStore: ObservableObject {
     /// Worker: set of jobIds applied this session (immediate, before /my/applications/ is fetched)
     @Published private(set) var appliedJobIds: Set<Int> = []
 
+    /// Deep-link: set by push notification tap to navigate to a specific job
+    @Published var pendingDeepLinkJobId: Int?
+
     /// Business: hire state
     @Published private(set) var isHiring = false
     @Published private(set) var hireError: JobStoreError? = nil
@@ -116,6 +122,19 @@ final class JobStore: ObservableObject {
     /// Business: complete job state
     @Published private(set) var isCompleting = false
     @Published private(set) var completeError: JobStoreError? = nil
+    @Published var completionReview: JobCompletionReview? = nil
+    @Published var completionJobId: Int? = nil
+    @Published var completionJobTitle: String? = nil
+
+    /// Refresh/task cancellations are expected during pull-to-refresh and tab/view transitions.
+    /// Ignore them so we don't show a false "No internet" banner.
+    private func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if case .network(let underlying) = (error as? AppError), let urlError = underlying as? URLError {
+            return urlError.code == .cancelled
+        }
+        return false
+    }
 
     // MARK: - Worker: Fetch Nearby Jobs
 
@@ -143,6 +162,10 @@ final class JobStore: ObservableObject {
             nearbyJobs = response.jobs
             print("[JOBS] fetchNearbyJobs: \(response.count) jobs (filter=\(filter ?? "all"))")
         } catch {
+            if isCancellation(error) {
+                print("[JOBS] fetchNearbyJobs cancelled")
+                return
+            }
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             nearbyJobsError = storeError
             print("[JOBS] fetchNearbyJobs error: \(storeError.errorDescription ?? "")")
@@ -170,6 +193,10 @@ final class JobStore: ObservableObject {
                 .sorted { $0.scheduledStart > $1.scheduledStart }
             print("[JOBS] fetchPostedJobs: \(response.count) jobs loaded")
         } catch {
+            if isCancellation(error) {
+                print("[JOBS] fetchPostedJobs cancelled")
+                return
+            }
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             postedJobsError = storeError
             print("[JOBS] fetchPostedJobs error: \(storeError.errorDescription ?? "")")
@@ -372,6 +399,10 @@ final class JobStore: ObservableObject {
 
             print("[JOBS] fetchMyApplications: \(pending.count) pending, \(accepted.count) accepted")
         } catch {
+            if isCancellation(error) {
+                print("[JOBS] fetchMyApplications cancelled")
+                return
+            }
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
             myApplicationsError = storeError
             print("[JOBS] fetchMyApplications error: \(storeError.errorDescription ?? "")")
@@ -416,6 +447,11 @@ final class JobStore: ObservableObject {
                 job.id == jobId ? job.withStatus(.filled) : job
             }
 
+            // Hiring creates a conversation atomically — refresh messages list
+            Task {
+                await MessageStore.shared.loadConversations()
+            }
+
             return hired
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
@@ -437,13 +473,19 @@ final class JobStore: ObservableObject {
         defer { isCompleting = false }
 
         do {
-            // No response body needed — just confirm 200
-            let _: VoidAPIResponse = try await APIClient.shared.request(.completeJob(jobId: jobId))
+            // Try to parse review data from the completion response
+            let resp: JobCompleteResponse = try await APIClient.shared.request(.completeJob(jobId: jobId))
             // Transition job locally: filled → completed
             postedJobs = postedJobs.map { job in
                 job.id == jobId ? job.withStatus(.completed) : job
             }
-            print("[JOBS] markJobComplete: jobId=\(jobId) → completed")
+            // Store review info if eligible
+            if let review = resp.review, review.eligible {
+                completionJobId = jobId
+                completionJobTitle = resp.job.title
+                completionReview = review
+            }
+            print("[JOBS] markJobComplete: jobId=\(jobId) → completed, reviewEligible=\(resp.review?.eligible ?? false)")
             return true
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
@@ -461,6 +503,7 @@ final class JobStore: ObservableObject {
 
     /// Clear all job-related state (e.g. on sign-out).
     func clearAll() {
+        pendingDeepLinkJobId = nil
         appliedJobIds = []
         nearbyJobs = []
         postedJobs = []
@@ -478,6 +521,25 @@ final class JobStore: ObservableObject {
         hireError = nil
         completeError = nil
         myApplicationsError = nil
+    }
+
+    /// Fetch a single job by ID and inject it into nearbyJobs if not already present.
+    /// Used for deep-link from push notification.
+    func fetchAndInjectJob(jobId: Int) async -> APIJob? {
+        // Already in the list?
+        if let existing = nearbyJobs.first(where: { $0.id == jobId }) {
+            return existing
+        }
+        do {
+            let response: JobDetailResponse = try await APIClient.shared.request(.jobDetail(jobId: jobId))
+            let job = response.job
+            // Insert at the top so it's visible
+            nearbyJobs.insert(job, at: 0)
+            return job
+        } catch {
+            print("[JOBS] fetchAndInjectJob failed: \(error)")
+            return nil
+        }
     }
 
     /// Whether the worker has already applied for a given job.

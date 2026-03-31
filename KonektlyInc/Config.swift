@@ -21,6 +21,11 @@ nonisolated enum AppEnvironment: Sendable {
     }
 }
 
+nonisolated enum AppleMode: String, Sendable {
+    case sandbox
+    case production
+}
+
 nonisolated struct Config: Sendable {
     // MARK: - API Base URL
     // Resolution order:
@@ -47,7 +52,7 @@ nonisolated struct Config: Sendable {
         case .staging:
             return URL(string: "https://staging-api.konektly.com")!
         case .production:
-            return URL(string: "https://api.konektly.com")!
+            return URL(string: "https://api.konektly.ca")!
         }
     }
 
@@ -58,10 +63,40 @@ nonisolated struct Config: Sendable {
         apiBaseURL.appendingPathComponent(apiVersion)
     }
 
-    // MARK: - Feature Flags
-    /// When true, the OTP screen accepts a plain numeric code without Firebase (dev mode only)
-    static var isDevOTPFallbackEnabled: Bool {
-        AppEnvironment.current == .development
+    // MARK: - Apple Subscription Mode
+    // Resolution order:
+    //   1. Info.plist key "APPLE_MODE" (preferred for build flavors)
+    //   2. Scheme environment variable "APPLE_MODE" (run-time override)
+    //   3. Compile-time default (Debug=sandbox, Release=production)
+    static var appleMode: AppleMode {
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "APPLE_MODE") as? String,
+           let mode = AppleMode(rawValue: plistValue.lowercased()) {
+            return mode
+        }
+        if let envValue = ProcessInfo.processInfo.environment["APPLE_MODE"],
+           let mode = AppleMode(rawValue: envValue.lowercased()) {
+            return mode
+        }
+        #if DEBUG
+        return .sandbox
+        #else
+        return .production
+        #endif
+    }
+
+    // MARK: - WebSocket Base URL
+    /// Converts http→ws, https→wss for WebSocket connections
+    static var wsBaseURL: URL {
+        let httpString = apiBaseURL.absoluteString
+        let wsString: String
+        if httpString.hasPrefix("https://") {
+            wsString = "wss://" + httpString.dropFirst("https://".count)
+        } else if httpString.hasPrefix("http://") {
+            wsString = "ws://" + httpString.dropFirst("http://".count)
+        } else {
+            wsString = httpString
+        }
+        return URL(string: wsString)!
     }
 
     // MARK: - Timeouts

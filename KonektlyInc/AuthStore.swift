@@ -22,8 +22,9 @@ enum OnboardingStep: Int, Comparable {
     case name = 0            // needs to set first/last name
     case dob = 1             // needs to set date of birth
     case terms = 2           // needs to accept terms
-    case profileDetails = 3  // needs to submit gov ID / business details
-    case complete = 4        // all done, dashboard access
+    case privacy = 3         // needs to accept privacy policy
+    case profileDetails = 4  // needs to submit gov ID / business details
+    case complete = 5        // all done, dashboard access
 
     static func < (lhs: OnboardingStep, rhs: OnboardingStep) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -66,6 +67,7 @@ final class AuthStore: ObservableObject {
         if !user.hasName { return .name }
         if !user.hasDOB { return .dob }
         if !user.hasAcceptedTerms { return .terms }
+        if !user.hasAcceptedPrivacy { return .privacy }
 
         let role = selectedRole
         let hasProfile = role == .worker
@@ -167,25 +169,6 @@ final class AuthStore: ObservableObject {
         await loadProfileStatus()
     }
 
-    // MARK: - Verify OTP (Dev fallback)
-
-    func verifyOTPDev(phone: String, code: String) async throws {
-        guard Config.isDevOTPFallbackEnabled else {
-            throw AppError.apiError(code: .unknown, message: "Dev fallback is not available in production.")
-        }
-        isLoading = true
-        defer { isLoading = false }
-        clearError()
-
-        let profileType = selectedRole.rawValue
-        let response: VerifyOTPResponse = try await APIClient.shared.publicRequest(
-            .verifyOTPDev(phone: phone, profileType: profileType, code: code)
-        )
-        storeTokens(response.tokens)
-        authState = .authenticated(user: response.user)
-        await loadProfileStatus()
-    }
-
     // MARK: - Load Current User
 
     func loadCurrentUser() async {
@@ -262,6 +245,29 @@ final class AuthStore: ObservableObject {
         await loadCurrentUser()
     }
 
+    // MARK: - Privacy Policy Accept
+
+    func acceptPrivacy(version: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        clearError()
+        let req = PrivacyAcceptRequest(accepted: true, privacyVersion: version)
+        let _: PrivacyAcceptResponse = try await APIClient.shared.request(.acceptPrivacy(req))
+        await loadCurrentUser()
+        print("[AUTH] acceptPrivacy: after reload, hasAcceptedPrivacy=\(currentUser?.hasAcceptedPrivacy ?? false) privacyAcceptedAt=\(currentUser?.privacyAcceptedAt ?? "nil")")
+    }
+
+    // MARK: - Account Deletion
+
+    func deleteAccount(phone: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        clearError()
+        let req = AccountDeleteRequest(phone: phone)
+        let _: AccountDeleteResponse = try await APIClient.shared.request(.deleteAccount(req))
+        signOut()
+    }
+
     // MARK: - Profile Creation (Step 7)
 
     func createWorkerProfile(_ request: WorkerProfileCreateRequest) async throws {
@@ -326,6 +332,13 @@ final class AuthStore: ObservableObject {
     func signOut() {
         stopVerificationPolling()
 
+        // Unregister FCM device before clearing tokens
+        if let fcmToken = AppDelegate.currentFCMToken {
+            Task.detached {
+                await MessageStore.shared.unregisterDevice(token: fcmToken)
+            }
+        }
+
         // Best-effort backend logout (blacklist refresh token). No UX changes:
         // fire-and-forget; local token state is cleared immediately.
         Task.detached {
@@ -339,6 +352,13 @@ final class AuthStore: ObservableObject {
         clearError()
         // Clear all jobs/applications state
         JobStore.shared.clearAll()
+        // Clear all messaging state
+        MessageStore.shared.clearAll()
+        // Clear review state
+        ReviewStore.shared.clearAll()
+        // Reset to role picker on next login
+        UserDefaults.standard.removeObject(forKey: "hasPickedRole")
+        UserDefaults.standard.removeObject(forKey: "userRole")
     }
 
     // MARK: - Helpers

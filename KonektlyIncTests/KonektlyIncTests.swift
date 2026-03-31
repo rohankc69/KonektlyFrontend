@@ -552,4 +552,31 @@ final class ProfilePhotoTests: XCTestCase {
         XCTAssertEqual(delete.path, "/api/v1/auth/profile/photo/")
         XCTAssertEqual(delete.method, .delete)
     }
+
+    // MARK: - Resume Upload Response Decoding
+
+    func test_resumeUploadURLResponse_decoding_putFormat() throws {
+        let json = """
+        {"upload_url":"https://s3.amazonaws.com/bucket/resume.pdf","file_key":"resumes/1.pdf","resume_id":1}
+        """.data(using: .utf8)!
+
+        let resp = try decoder.decode(ResumeUploadURLResponse.self, from: json)
+        XCTAssertEqual(resp.uploadUrl, "https://s3.amazonaws.com/bucket/resume.pdf")
+        XCTAssertEqual(resp.fileKey, "resumes/1.pdf")
+        XCTAssertEqual(resp.resumeId, 1)
+        XCTAssertNil(resp.upload)
+    }
+
+    func test_resumeUploadURLResponse_decoding_postFormat() throws {
+        let json = """
+        {"upload": {"method":"POST","url":"https://s3.amazonaws.com/bucket","fields":{"key":"resumes/2.pdf","policy":"abc"}}, "file_key":"resumes/2.pdf","resume_id":2}
+        """.data(using: .utf8)!
+
+        let resp = try decoder.decode(ResumeUploadURLResponse.self, from: json)
+        XCTAssertNil(resp.uploadUrl)
+        XCTAssertEqual(resp.fileKey, "resumes/2.pdf")
+        XCTAssertEqual(resp.resumeId, 2)
+        XCTAssertEqual(resp.upload?.method, "POST")
+        XCTAssertEqual(resp.upload?.fields["key"], "resumes/2.pdf")
+    }
 }

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct PhoneLoginView: View {
     @EnvironmentObject private var authStore: AuthStore
+    @AppStorage("hasPickedRole") private var hasPickedRole = false
 
     @State private var phoneNumber = ""
     @State private var isLoading = false
@@ -16,14 +17,17 @@ struct PhoneLoginView: View {
     @State private var navigateToOTP = false
     @State private var cooldownSeconds = 0
     @State private var cooldownTimer: Timer?
+    @State private var showCountryPicker = false
+    @State private var selectedCountry: CountryCode = .canada
     @FocusState private var isPhoneFocused: Bool
 
     private var formattedPhone: String {
-        phoneNumber.filter { $0.isNumber || $0 == "+" }
+        let raw = phoneNumber.filter { $0.isNumber }
+        return "\(selectedCountry.dialCode)\(raw)"
     }
 
     private var isPhoneValid: Bool {
-        let digits = formattedPhone.filter(\.isNumber)
+        let digits = phoneNumber.filter(\.isNumber)
         return digits.count >= 7 && digits.count <= 15
     }
 
@@ -46,22 +50,29 @@ struct PhoneLoginView: View {
 
                         // Phone input
                         HStack(spacing: Theme.Spacing.sm) {
-                            // Country code hint
-                            HStack(spacing: Theme.Spacing.xs) {
-                                Image(systemName: "globe")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(Theme.Colors.secondaryText)
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(Theme.Colors.secondaryText)
+                            // Country code picker
+                            Button {
+                                showCountryPicker = true
+                            } label: {
+                                HStack(spacing: Theme.Spacing.xs) {
+                                    Text(selectedCountry.flag)
+                                        .font(.system(size: 20))
+                                    Text(selectedCountry.dialCode)
+                                        .font(Theme.Typography.body)
+                                        .foregroundColor(Theme.Colors.primaryText)
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(Theme.Colors.secondaryText)
+                                }
+                                .padding(.horizontal, Theme.Spacing.md)
+                                .frame(height: 52)
+                                .background(Theme.Colors.inputBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
                             }
-                            .padding(.horizontal, Theme.Spacing.md)
-                            .frame(height: 52)
-                            .background(Theme.Colors.inputBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                            .buttonStyle(.plain)
 
                             // Phone field
-                            TextField("+1 Mobile number", text: $phoneNumber)
+                            TextField("Mobile number", text: $phoneNumber)
                                 .keyboardType(.phonePad)
                                 .font(Theme.Typography.body)
                                 .foregroundColor(Theme.Colors.primaryText)
@@ -99,8 +110,10 @@ struct PhoneLoginView: View {
 
                 // Bottom bar
                 HStack {
-                    // Back button (go to role picker)
-                    Button(action: {}) {
+                    // Back button → go back to role picker
+                    Button {
+                        hasPickedRole = false
+                    } label: {
                         Image(systemName: "arrow.left")
                             .font(.system(size: 20, weight: .medium))
                             .foregroundColor(Theme.Colors.primaryText)
@@ -126,7 +139,7 @@ struct PhoneLoginView: View {
                                 .frame(height: 48)
                         }
                     }
-                    .background(canSubmit ? Color.black : Color.black.opacity(0.3))
+                    .background(canSubmit ? Theme.Colors.buttonPrimary : Theme.Colors.buttonPrimary.opacity(0.3))
                     .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.pill))
                     .disabled(!canSubmit)
                 }
@@ -137,6 +150,9 @@ struct PhoneLoginView: View {
             .navigationBarHidden(true)
             .navigationDestination(isPresented: $navigateToOTP) {
                 OTPVerificationView(phoneNumber: formattedPhone)
+            }
+            .sheet(isPresented: $showCountryPicker) {
+                CountryPickerView(selectedCountry: $selectedCountry)
             }
         }
     }
