@@ -1010,12 +1010,28 @@ extension Endpoint {
 
     // MARK: - Notification Preferences
 
-    /// GET /api/v1/notifications/preferences/
-    static let notificationPreferences = Endpoint(path: "/api/v1/notifications/preferences/", method: .get)
+    /// Job / message / legacy marketing toggles (`messaging.NotificationPreference`).
+    /// GET/PATCH /api/v1/messages/notification-preferences/
+    static let messagingNotificationPreferences = Endpoint(path: "/api/v1/messages/notification-preferences/", method: .get)
 
-    /// PATCH /api/v1/notifications/preferences/
-    static func updateNotificationPreferences(_ req: NotificationPreferencesUpdate) -> Endpoint {
+    static func updateMessagingNotificationPreferences(_ req: NotificationPreferencesUpdate) -> Endpoint {
+        Endpoint(path: "/api/v1/messages/notification-preferences/", method: .patch, body: AnyEncodable(req))
+    }
+
+    /// Push campaign prefs (`notifications.UserNotificationPreference`).
+    /// GET/PATCH /api/v1/notifications/preferences/
+    static let pushNotificationPreferences = Endpoint(path: "/api/v1/notifications/preferences/", method: .get)
+
+    static func updatePushNotificationPreferences(_ req: PushNotificationPreferencesUpdate) -> Endpoint {
         Endpoint(path: "/api/v1/notifications/preferences/", method: .patch, body: AnyEncodable(req))
+    }
+
+    /// GET /api/v1/notifications/history/?page=&page_size=
+    static func notificationHistory(page: Int, pageSize: Int) -> Endpoint {
+        Endpoint(
+            path: "/api/v1/notifications/history/?page=\(page)&page_size=\(pageSize)",
+            method: .get
+        )
     }
 
     /// POST /api/v1/messages/conversations/<uuid>/mute/
@@ -1156,5 +1172,96 @@ extension Endpoint {
     /// GET /api/v1/profiles/business/<user_id>/public/
     static func publicBusinessProfile(userId: Int) -> Endpoint {
         Endpoint(path: "/api/v1/profiles/business/\(userId)/public/", method: .get)
+    }
+
+    // MARK: - Support Endpoints
+
+    /// GET /api/v1/support/tickets/
+    static let supportTickets = Endpoint(path: "/api/v1/support/tickets/", method: .get)
+
+    /// POST /api/v1/support/tickets/
+    static func createTicket(_ req: CreateTicketRequest) -> Endpoint {
+        Endpoint(path: "/api/v1/support/tickets/", method: .post, body: AnyEncodable(req))
+    }
+
+    /// GET /api/v1/support/tickets/<ticket_number>/
+    static func ticketDetail(ticketNumber: String) -> Endpoint {
+        Endpoint(path: "/api/v1/support/tickets/\(ticketNumber)/", method: .get)
+    }
+
+    /// GET /api/v1/support/tickets/<ticket_number>/messages/
+    static func ticketMessages(ticketNumber: String) -> Endpoint {
+        Endpoint(path: "/api/v1/support/tickets/\(ticketNumber)/messages/", method: .get)
+    }
+
+    /// POST /api/v1/support/tickets/<ticket_number>/messages/
+    static func sendTicketMessage(ticketNumber: String, message: String) -> Endpoint {
+        Endpoint(
+            path: "/api/v1/support/tickets/\(ticketNumber)/messages/",
+            method: .post,
+            body: AnyEncodable(SendTicketMessageRequest(body: message))
+        )
+    }
+
+    /// POST /api/v1/support/tickets/<ticket_number>/close/
+    static func closeTicket(ticketNumber: String) -> Endpoint {
+        Endpoint(path: "/api/v1/support/tickets/\(ticketNumber)/close/", method: .post)
+    }
+
+    /// GET /api/v1/support/faq/
+    static let supportFAQs = Endpoint(path: "/api/v1/support/faq/", method: .get)
+
+    /// POST /api/v1/support/faq/<id>/helpful/
+    static func faqVote(id: Int, isHelpful: Bool) -> Endpoint {
+        Endpoint(
+            path: "/api/v1/support/faq/\(id)/helpful/",
+            method: .post,
+            body: AnyEncodable(FAQVoteRequest(isHelpful: isHelpful))
+        )
+    }
+
+    // MARK: - Activity Endpoints
+
+    /// GET /api/v1/activity/feed/
+    static func activityFeed(page: Int = 1, pageSize: Int = 20, type: String = "") -> Endpoint {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "page",      value: "\(page)"),
+            URLQueryItem(name: "page_size", value: "\(pageSize)"),
+        ]
+        if !type.isEmpty { items.append(URLQueryItem(name: "type", value: type)) }
+        return Endpoint(path: "/api/v1/activity/feed/", method: .get, queryItems: items)
+    }
+
+    /// GET /api/v1/activity/stats/
+    static let activityStats = Endpoint(path: "/api/v1/activity/stats/", method: .get)
+
+    /// GET /api/v1/activity/jobs/
+    static func activityJobs(role: String = "", status: String = "", page: Int = 1, pageSize: Int = 20) -> Endpoint {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "page",      value: "\(page)"),
+            URLQueryItem(name: "page_size", value: "\(pageSize)"),
+        ]
+        if !role.isEmpty   { items.append(URLQueryItem(name: "role",   value: role)) }
+        if !status.isEmpty { items.append(URLQueryItem(name: "status", value: status)) }
+        return Endpoint(path: "/api/v1/activity/jobs/", method: .get, queryItems: items)
+    }
+
+    /// GET /api/v1/activity/payments/
+    static func activityPayments(page: Int = 1, pageSize: Int = 20) -> Endpoint {
+        let items: [URLQueryItem] = [
+            URLQueryItem(name: "page",      value: "\(page)"),
+            URLQueryItem(name: "page_size", value: "\(pageSize)"),
+        ]
+        return Endpoint(path: "/api/v1/activity/payments/", method: .get, queryItems: items)
+    }
+
+    /// GET /api/v1/activity/reviews/
+    static func activityReviews(direction: String = "", page: Int = 1, pageSize: Int = 20) -> Endpoint {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "page",      value: "\(page)"),
+            URLQueryItem(name: "page_size", value: "\(pageSize)"),
+        ]
+        if !direction.isEmpty { items.append(URLQueryItem(name: "direction", value: direction)) }
+        return Endpoint(path: "/api/v1/activity/reviews/", method: .get, queryItems: items)
     }
 }

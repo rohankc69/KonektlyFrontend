@@ -117,6 +117,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             }
         }
 
+        // Campaign / marketing pushes (custom notification system)
+        if let t = notificationType,
+           Self.campaignDataTypes.contains(t) {
+            Task { @MainActor in
+                NotificationCenter.default.post(name: .marketingPushReceived, object: nil)
+            }
+        }
+
         return [.banner, .sound, .badge]
     }
 
@@ -132,6 +140,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             await MainActor.run {
                 JobStore.shared.pendingDeepLinkJobId = jobId
             }
+        } else if let t = notificationType, Self.campaignDataTypes.contains(t) {
+            let tid = userInfo["template_id"] as? String ?? (userInfo["template_id"] as? NSNumber).map { String(describing: $0) }
+            let cid = userInfo["campaign_id"] as? String ?? (userInfo["campaign_id"] as? NSNumber).map { String(describing: $0) }
+            await MainActor.run {
+                NotificationRoutingStore.shared.pendingTemplateId = tid
+                NotificationRoutingStore.shared.pendingCampaignId = cid
+            }
         } else if let conversationIdStr = userInfo["conversation_id"] as? String,
                   let conversationId = UUID(uuidString: conversationIdStr) {
             await MainActor.run {
@@ -139,6 +154,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             }
         }
     }
+
+    /// `data.type` from FCM for the notifications app (marketing, transactional, etc.).
+    private static let campaignDataTypes: Set<String> = [
+        "marketing", "promotional", "re_engagement", "transactional",
+        "test_notification",
+    ]
+}
+
+extension Notification.Name {
+    static let marketingPushReceived = Notification.Name("marketingPushReceived")
 }
 
 @main
@@ -159,6 +184,7 @@ struct KonektlyIncApp: App {
                 .environmentObject(locationManager)
                 .environmentObject(subscriptionManager)
                 .environmentObject(messageStore)
+                .environmentObject(NotificationRoutingStore.shared)
                 .task {
                     #if DEBUG
                     print("[APP] API: \(Config.apiBaseURL) | WS: \(Config.wsBaseURL) | ENV: \(AppEnvironment.current)")

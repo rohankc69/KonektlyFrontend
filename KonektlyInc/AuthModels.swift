@@ -110,6 +110,10 @@ nonisolated enum APIErrorCode: String, Sendable {
     case noCompletedShift = "NO_COMPLETED_SHIFT"
     // Experience
     case maxExperiencesReached = "MAX_EXPERIENCES_REACHED"
+    // Support
+    case ticketNotFound     = "TICKET_NOT_FOUND"
+    case ticketLimitReached = "TICKET_LIMIT_REACHED"
+    case ticketAlreadyClosed = "TICKET_ALREADY_CLOSED"
 
     var userFacingMessage: String {
         switch self {
@@ -161,6 +165,10 @@ nonisolated enum APIErrorCode: String, Sendable {
         case .noCompletedShift: return "No completed shift record found for this job."
         // Experience
         case .maxExperiencesReached: return "You've reached the maximum of 20 experience entries."
+        // Support
+        case .ticketNotFound:     return "This support ticket could not be found."
+        case .ticketLimitReached: return "You've reached the limit of open support tickets. Please close an existing ticket first."
+        case .ticketAlreadyClosed: return "This ticket is already closed."
         }
     }
 }
@@ -276,18 +284,22 @@ nonisolated struct ProfilePhoto: Decodable, Sendable, Equatable {
     }
 
     private func resolveURL(_ urlString: String) -> URL? {
-        var fullString: String
-        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
-            fullString = urlString
-        } else {
-            // Relative URL from backend - prepend base URL
-            fullString = Config.apiBaseURL.absoluteString + urlString
+        let isAbsolute = urlString.hasPrefix("http://") || urlString.hasPrefix("https://")
+        if isAbsolute {
+            // Absolute URLs (S3 presigned, CDN) must never be modified.
+            // S3 Signature V4 presigned URLs sign the exact query string —
+            // appending any extra parameter (e.g. &v=) invalidates the signature → 403.
+            return URL(string: urlString)
         }
+        // Relative URL served by the backend (local dev) — prepend base URL
+        // and append a cache-busting version param so re-uploaded photos
+        // are not served stale by the OS URL cache.
+        var full = Config.apiBaseURL.absoluteString + urlString
         if let v = version, !v.isEmpty {
-            let separator = fullString.contains("?") ? "&" : "?"
-            fullString += "\(separator)v=\(v)"
+            let separator = full.contains("?") ? "&" : "?"
+            full += "\(separator)v=\(v)"
         }
-        return URL(string: fullString)
+        return URL(string: full)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1467,14 +1479,15 @@ nonisolated struct DeviceUnregisterRequest: Encodable, Sendable {
 // MARK: - Block / Report API Models
 
 nonisolated struct BlockedUser: Decodable, Sendable, Identifiable, Equatable {
-    let id: Int
     let userId: Int
     let firstName: String?
     let lastName: String?
     let blockedAt: Date
 
+    // Backend returns user_id as the unique key; use it for Identifiable.
+    var id: Int { userId }
+
     enum CodingKeys: String, CodingKey {
-        case id
         case userId = "user_id"
         case firstName = "first_name"
         case lastName = "last_name"
@@ -1591,6 +1604,80 @@ nonisolated struct NotificationPreferencesUpdate: Encodable, Sendable {
         case jobNotifications = "job_notifications"
         case messageNotifications = "message_notifications"
         case marketingNotifications = "marketing_notifications"
+    }
+}
+
+// MARK: - Push / campaign preferences (notifications app — UserNotificationPreference)
+
+nonisolated struct PushNotificationPreferences: Codable, Sendable {
+    var marketingEnabled: Bool
+    var pushEnabled: Bool
+    var quietHoursEnabled: Bool
+    var quietStart: String?
+    var quietEnd: String?
+    var updatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case marketingEnabled = "marketing_enabled"
+        case pushEnabled = "push_enabled"
+        case quietHoursEnabled = "quiet_hours_enabled"
+        case quietStart = "quiet_start"
+        case quietEnd = "quiet_end"
+        case updatedAt = "updated_at"
+    }
+}
+
+nonisolated struct PushNotificationPreferencesEnvelope: Decodable, Sendable {
+    let preferences: PushNotificationPreferences
+}
+
+nonisolated struct PushNotificationPreferencesUpdate: Encodable, Sendable {
+    var marketingEnabled: Bool?
+    var pushEnabled: Bool?
+    var quietHoursEnabled: Bool?
+    var quietStart: String?
+    var quietEnd: String?
+
+    enum CodingKeys: String, CodingKey {
+        case marketingEnabled = "marketing_enabled"
+        case pushEnabled = "push_enabled"
+        case quietHoursEnabled = "quiet_hours_enabled"
+        case quietStart = "quiet_start"
+        case quietEnd = "quiet_end"
+    }
+}
+
+// MARK: - Notification inbox (campaign / marketing history)
+
+nonisolated struct NotificationInboxItem: Identifiable, Decodable, Sendable {
+    let id: Int
+    let templateName: String?
+    let campaignName: String?
+    let titleRendered: String
+    let bodyRendered: String
+    let sentAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case templateName = "template_name"
+        case campaignName = "campaign_name"
+        case titleRendered = "title_rendered"
+        case bodyRendered = "body_rendered"
+        case sentAt = "sent_at"
+    }
+}
+
+nonisolated struct NotificationHistoryEnvelope: Decodable, Sendable {
+    let notifications: [NotificationInboxItem]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+    let hasNext: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case notifications, total, page
+        case pageSize = "page_size"
+        case hasNext = "has_next"
     }
 }
 
