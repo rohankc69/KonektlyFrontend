@@ -20,6 +20,19 @@ struct EmailVerificationView: View {
     @State private var cooldownTimer: Timer?
     @FocusState private var isEmailFocused: Bool
 
+    private var isEmailVerified: Bool { authStore.currentUser?.emailVerified == true }
+
+    private var headerTitle: String {
+        isEmailVerified ? "Change your email" : "Enter your email address"
+    }
+
+    private var headerSubtitle: String {
+        if isEmailVerified {
+            return "We’ll email a link to your new address. After you verify, it replaces your previous email."
+        }
+        return "Add your email to aid in account recovery"
+    }
+
     // Deep-link / manual token entry
     @State private var manualToken = ""
     @State private var showManualEntry = false
@@ -40,11 +53,11 @@ struct EmailVerificationView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
                     // Header
                     VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                        Text("Enter your email address")
+                        Text(headerTitle)
                             .font(.system(size: 22, weight: .bold))
                             .foregroundColor(Theme.Colors.primaryText)
 
-                        Text("Add your email to aid in account recovery")
+                        Text(headerSubtitle)
                             .font(Theme.Typography.subheadline)
                             .foregroundColor(Theme.Colors.secondaryText)
                     }
@@ -182,6 +195,12 @@ struct EmailVerificationView: View {
         }
         .background(Theme.Colors.background)
         .navigationBarHidden(true)
+        .onAppear {
+            let trimmed = authStore.currentUser?.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !isSent {
+                email = trimmed
+            }
+        }
         .onOpenURL { handleDeepLink($0) }
     }
 
@@ -243,6 +262,7 @@ struct EmailVerificationView: View {
             do {
                 try await authStore.verifyEmailToken(manualToken)
                 successMessage = "Email verified successfully."
+                await authStore.loadCurrentUser()
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {
@@ -260,6 +280,7 @@ struct EmailVerificationView: View {
             do {
                 try await authStore.verifyEmailToken(token)
                 successMessage = "Email verified successfully."
+                await authStore.loadCurrentUser()
             } catch let appError as AppError {
                 errorMessage = appError.errorDescription
             } catch {

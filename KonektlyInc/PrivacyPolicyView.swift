@@ -66,7 +66,8 @@ struct PrivacyAcceptView: View {
     @ViewBuilder
     private func contentView(privacy: PrivacyDocument) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
+                PrivacyPolicySafariLinkCard()
                 HStack(alignment: .top, spacing: Theme.Spacing.lg) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 36))
@@ -183,6 +184,7 @@ struct PrivacyAcceptView: View {
 
 struct PrivacyReadView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     @State private var privacy: PrivacyDocument?
     @State private var isLoading = true
@@ -225,6 +227,11 @@ struct PrivacyReadView: View {
                     Text("Loading Privacy Policy…")
                         .font(Theme.Typography.subheadline)
                         .foregroundColor(Theme.Colors.secondaryText)
+                    Button("View on konektly.ca") {
+                        openURL(AppWebsiteURLs.privacyPolicy)
+                    }
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundColor(Theme.Colors.accent)
                 }
                 Spacer()
 
@@ -244,12 +251,19 @@ struct PrivacyReadView: View {
                     }
                     .font(Theme.Typography.subheadline.weight(.semibold))
                     .foregroundColor(Theme.Colors.primaryText)
+                    Button("Open privacy policy in browser") {
+                        openURL(AppWebsiteURLs.privacyPolicy)
+                    }
+                    .font(Theme.Typography.subheadline.weight(.semibold))
+                    .foregroundColor(Theme.Colors.accent)
+                    .padding(.top, Theme.Spacing.sm)
                 }
                 Spacer()
 
             } else if let privacy {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        PrivacyPolicySafariLinkCard()
                         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                             Text(privacy.title)
                                 .font(.system(size: 22, weight: .bold))

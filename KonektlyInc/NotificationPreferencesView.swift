@@ -2,8 +2,7 @@
 //  NotificationPreferencesView.swift
 //  KonektlyInc
 //
-//  Messaging toggles: GET/PATCH …/messages/notification-preferences/
-//  Campaign / push caps: GET/PATCH …/notifications/preferences/
+//  GET/PATCH /api/v1/notifications/preferences/ — unified preferences in `data.preferences`.
 //
 
 import SwiftUI
@@ -11,23 +10,21 @@ import SwiftUI
 struct NotificationPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
 
-    // Messaging (jobs, chat, legacy marketing channel)
+    @State private var pushEnabled = true
     @State private var jobNotifications = true
     @State private var messageNotifications = true
-    @State private var marketingNotifications = true
-
-    // Push notification engine (UserNotificationPreference)
-    @State private var pushEnabled = true
-    @State private var campaignMarketingEnabled = true
+    @State private var marketingEnabled = true
     @State private var quietHoursEnabled = false
-    @State private var quietStartText = "22:00"
-    @State private var quietEndText = "08:00"
+    @State private var quietStartDate = Date()
+    @State private var quietEndDate = Date()
 
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var pushPrefsError: String?
     @State private var showHistory = false
+
+    /// Avoid firing PATCH when applying server state to local `@State`.
+    @State private var isApplyingRemote = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,96 +62,90 @@ struct NotificationPreferencesView: View {
             } else {
                 List {
                     Section {
-                        Toggle(isOn: $jobNotifications) {
-                            label(icon: "briefcase.fill", title: "Job alerts", subtitle: "New jobs near you")
-                        }
-                        .tint(Theme.Colors.accent)
-                        .onChange(of: jobNotifications) { _, newValue in
-                            saveMessaging(update: NotificationPreferencesUpdate(jobNotifications: newValue))
-                        }
+                        toggleRow(
+                            icon: "bell.badge.fill",
+                            title: "All notifications",
+                            subtitle: "Master switch for push alerts",
+                            binding: pushBinding
+                        )
 
-                        Toggle(isOn: $messageNotifications) {
-                            label(icon: "bubble.left.fill", title: "Messages", subtitle: "Chat message alerts")
-                        }
-                        .tint(Theme.Colors.accent)
-                        .onChange(of: messageNotifications) { _, newValue in
-                            saveMessaging(update: NotificationPreferencesUpdate(messageNotifications: newValue))
-                        }
+                        toggleRow(
+                            icon: "briefcase.fill",
+                            title: "Job alerts",
+                            subtitle: "Hired, new jobs nearby, rejected",
+                            binding: jobBinding
+                        )
+                        .disabled(!pushEnabled)
+                        .opacity(pushEnabled ? 1 : 0.45)
 
-                        Toggle(isOn: $marketingNotifications) {
-                            label(icon: "megaphone.fill", title: "Offers channel", subtitle: "Legacy promotional channel")
-                        }
-                        .tint(Theme.Colors.accent)
-                        .onChange(of: marketingNotifications) { _, newValue in
-                            saveMessaging(update: NotificationPreferencesUpdate(marketingNotifications: newValue))
-                        }
+                        toggleRow(
+                            icon: "bubble.left.fill",
+                            title: "Chat messages",
+                            subtitle: "New message alerts",
+                            binding: messageBinding
+                        )
+                        .disabled(!pushEnabled)
+                        .opacity(pushEnabled ? 1 : 0.45)
+
+                        toggleRow(
+                            icon: "megaphone.fill",
+                            title: "Promotions & offers",
+                            subtitle: "Marketing and campaigns",
+                            binding: marketingBinding
+                        )
+                        .disabled(!pushEnabled)
+                        .opacity(pushEnabled ? 1 : 0.45)
                     } header: {
-                        Text("Jobs & messages")
+                        Text("Preferences")
                     } footer: {
-                        Text("Controls job and chat alerts. Manage system alerts in the Settings app.")
+                        Text("Transactional updates (payments, support replies, reviews) are delivered when All notifications is on. Fine-grained toggles don’t apply to those.")
                             .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
                     }
 
                     Section {
-                        Toggle(isOn: $pushEnabled) {
-                            label(icon: "bell.badge.fill", title: "Push notifications", subtitle: "Master switch for campaign pushes")
+                        Toggle(isOn: quietHoursBinding) {
+                            label(
+                                icon: "moon.fill",
+                                title: "Quiet hours",
+                                subtitle: "Reduce non-urgent notifications during a window"
+                            )
                         }
                         .tint(Theme.Colors.accent)
-                        .onChange(of: pushEnabled) { _, _ in savePushPrefs() }
+                        .disabled(!pushEnabled)
+                        .opacity(pushEnabled ? 1 : 0.45)
 
-                        Toggle(isOn: $campaignMarketingEnabled) {
-                            label(icon: "sparkles", title: "Campaigns & tips", subtitle: "Personalized offers and updates")
-                        }
-                        .tint(Theme.Colors.accent)
-                        .onChange(of: campaignMarketingEnabled) { _, _ in savePushPrefs() }
+                        if quietHoursEnabled && pushEnabled {
+                            DatePicker(
+                                "From",
+                                selection: $quietStartDate,
+                                displayedComponents: .hourAndMinute
+                            )
+                            .tint(Theme.Colors.accent)
 
-                        Toggle(isOn: $quietHoursEnabled) {
-                            label(icon: "moon.fill", title: "Quiet hours", subtitle: "Reduce notifications at night")
-                        }
-                        .tint(Theme.Colors.accent)
-                        .onChange(of: quietHoursEnabled) { _, _ in savePushPrefs() }
+                            DatePicker(
+                                "To",
+                                selection: $quietEndDate,
+                                displayedComponents: .hourAndMinute
+                            )
+                            .tint(Theme.Colors.accent)
 
-                        if quietHoursEnabled {
-                            HStack {
-                                Text("From")
-                                    .font(Theme.Typography.body)
-                                TextField("22:00", text: $quietStartText)
-                                    .keyboardType(.numbersAndPunctuation)
-                                    .textContentType(.none)
-                                    .autocorrectionDisabled()
-                                    .font(Theme.Typography.body)
-                                    .padding(Theme.Spacing.sm)
-                                    .background(Theme.Colors.inputBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
-                                Text("To")
-                                    .font(Theme.Typography.body)
-                                TextField("08:00", text: $quietEndText)
-                                    .keyboardType(.numbersAndPunctuation)
-                                    .autocorrectionDisabled()
-                                    .font(Theme.Typography.body)
-                                    .padding(Theme.Spacing.sm)
-                                    .background(Theme.Colors.inputBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                            Button {
+                                saveQuietTimes()
+                            } label: {
+                                Text("Save quiet hours")
+                                    .font(Theme.Typography.subheadline.weight(.semibold))
+                                    .foregroundColor(Theme.Colors.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            Button("Save quiet hours") {
-                                savePushPrefs()
-                            }
-                            .font(Theme.Typography.subheadline.weight(.semibold))
-                            .foregroundColor(Theme.Colors.accent)
+                            .buttonStyle(.plain)
                         }
                     } header: {
-                        Text("Campaigns")
+                        Text("Quiet hours")
                     } footer: {
-                        Group {
-                            if let pushPrefsError {
-                                Text(pushPrefsError)
-                                    .foregroundColor(Theme.Colors.error)
-                            } else {
-                                Text("Frequency limits and quiet hours are applied on the server. [TEST] pushes are from admin tools.")
-                                    .foregroundColor(Theme.Colors.secondaryText)
-                            }
-                        }
-                        .font(Theme.Typography.caption)
+                        Text("Times use 24-hour format and are sent to the server as HH:MM:SS (e.g. 22:00:00).")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
                     }
 
                     Section {
@@ -175,9 +166,9 @@ struct NotificationPreferencesView: View {
                         }
                     }
 
-                    if let error = errorMessage {
+                    if let errorMessage {
                         Section {
-                            Text(error)
+                            Text(errorMessage)
                                 .font(Theme.Typography.footnote)
                                 .foregroundColor(Theme.Colors.error)
                         }
@@ -192,7 +183,96 @@ struct NotificationPreferencesView: View {
         .navigationDestination(isPresented: $showHistory) {
             NotificationHistoryView()
         }
-        .task { await fetchAll() }
+        .task { await loadPreferences() }
+    }
+
+    // MARK: - Toggle bindings (PATCH single field)
+
+    private var pushBinding: Binding<Bool> {
+        Binding(
+            get: { pushEnabled },
+            set: { new in
+                pushEnabled = new
+                guard !isApplyingRemote else { return }
+                patch(PushNotificationPreferencesUpdate(pushEnabled: new))
+            }
+        )
+    }
+
+    private var jobBinding: Binding<Bool> {
+        Binding(
+            get: { jobNotifications },
+            set: { new in
+                jobNotifications = new
+                guard !isApplyingRemote else { return }
+                patch(PushNotificationPreferencesUpdate(jobNotifications: new))
+            }
+        )
+    }
+
+    private var messageBinding: Binding<Bool> {
+        Binding(
+            get: { messageNotifications },
+            set: { new in
+                messageNotifications = new
+                guard !isApplyingRemote else { return }
+                patch(PushNotificationPreferencesUpdate(messageNotifications: new))
+            }
+        )
+    }
+
+    private var marketingBinding: Binding<Bool> {
+        Binding(
+            get: { marketingEnabled },
+            set: { new in
+                marketingEnabled = new
+                guard !isApplyingRemote else { return }
+                patch(PushNotificationPreferencesUpdate(marketingEnabled: new))
+            }
+        )
+    }
+
+    private var quietHoursBinding: Binding<Bool> {
+        Binding(
+            get: { quietHoursEnabled },
+            set: { new in
+                quietHoursEnabled = new
+                guard !isApplyingRemote else { return }
+                if new {
+                    patch(
+                        PushNotificationPreferencesUpdate(
+                            quietHoursEnabled: true,
+                            quietStart: Self.hhmmss(from: quietStartDate),
+                            quietEnd: Self.hhmmss(from: quietEndDate)
+                        )
+                    )
+                } else {
+                    patch(PushNotificationPreferencesUpdate(quietHoursEnabled: false))
+                }
+            }
+        )
+    }
+
+    private func saveQuietTimes() {
+        guard quietHoursEnabled, pushEnabled else { return }
+        patch(
+            PushNotificationPreferencesUpdate(
+                quietStart: Self.hhmmss(from: quietStartDate),
+                quietEnd: Self.hhmmss(from: quietEndDate)
+            )
+        )
+    }
+
+    private func toggleRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        binding: Binding<Bool>
+    ) -> some View {
+        Toggle(isOn: binding) {
+            label(icon: icon, title: title, subtitle: subtitle)
+        }
+        .tint(Theme.Colors.accent)
     }
 
     private func label(icon: String, title: String, subtitle: String) -> some View {
@@ -212,127 +292,75 @@ struct NotificationPreferencesView: View {
         }
     }
 
-    private func fetchAll() async {
+    private func applyFromServer(_ prefs: PushNotificationPreferences) {
+        isApplyingRemote = true
+        pushEnabled = prefs.pushEnabled
+        jobNotifications = prefs.jobNotifications
+        messageNotifications = prefs.messageNotifications
+        marketingEnabled = prefs.marketingEnabled
+        quietHoursEnabled = prefs.quietHoursEnabled
+        quietStartDate = Self.dateFromHHMMSS(prefs.quietStart, defaultHour: 22, defaultMinute: 0)
+        quietEndDate = Self.dateFromHHMMSS(prefs.quietEnd, defaultHour: 8, defaultMinute: 0)
+        isApplyingRemote = false
+    }
+
+    private func loadPreferences() async {
         isLoading = true
         errorMessage = nil
-        pushPrefsError = nil
         defer { isLoading = false }
-
-        async let messaging: Result<NotificationPreferences, Error> = {
-            do {
-                let p: NotificationPreferences = try await APIClient.shared.request(.messagingNotificationPreferences)
-                return .success(p)
-            } catch {
-                return .failure(error)
-            }
-        }()
-
-        async let push: Result<PushNotificationPreferencesEnvelope, Error> = {
-            do {
-                let p: PushNotificationPreferencesEnvelope = try await APIClient.shared.request(.pushNotificationPreferences)
-                return .success(p)
-            } catch {
-                return .failure(error)
-            }
-        }()
-
-        let m = await messaging
-        let p = await push
-
-        switch m {
-        case .success(let prefs):
-            jobNotifications = prefs.jobNotifications
-            messageNotifications = prefs.messageNotifications
-            marketingNotifications = prefs.marketingNotifications
-        case .failure:
-            errorMessage = "Could not load job and message preferences."
-        }
-
-        switch p {
-        case .success(let env):
-            let prefs = env.preferences
-            pushEnabled = prefs.pushEnabled
-            campaignMarketingEnabled = prefs.marketingEnabled
-            quietHoursEnabled = prefs.quietHoursEnabled
-            quietStartText = Self.formatQuiet(prefs.quietStart) ?? "22:00"
-            quietEndText = Self.formatQuiet(prefs.quietEnd) ?? "08:00"
-        case .failure:
-            pushPrefsError = "Campaign preferences are unavailable (update the app or try again later)."
+        do {
+            let env: PushNotificationPreferencesEnvelope = try await APIClient.shared.request(
+                .pushNotificationPreferences
+            )
+            applyFromServer(env.preferences)
+        } catch {
+            errorMessage = "Could not load notification preferences."
+            print("[NOTIFY_PREFS] load error: \(error)")
         }
     }
 
-    /// Backend sends "HH:MM:SS" or null — show HH:MM
-    private static func formatQuiet(_ s: String?) -> String? {
-        guard let s, !s.isEmpty else { return nil }
-        let parts = s.split(separator: ":")
-        if parts.count >= 2 {
-            return "\(parts[0]):\(parts[1])"
-        }
-        return String(s)
-    }
-
-    /// Accepts "HH:MM" or "H:MM" → "HH:MM:SS"
-    private static func normalizeTime(_ raw: String) -> String? {
-        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = t.split(separator: ":").map(String.init)
-        guard parts.count >= 2,
-              let h = Int(parts[0]),
-              let m = Int(parts[1]),
-              h >= 0, h < 24, m >= 0, m < 60 else { return nil }
-        return String(format: "%02d:%02d:00", h, m)
-    }
-
-    private func saveMessaging(update: NotificationPreferencesUpdate) {
+    private func patch(_ update: PushNotificationPreferencesUpdate) {
         errorMessage = nil
-        Task {
-            do {
-                let _: NotificationPreferences = try await APIClient.shared.request(
-                    .updateMessagingNotificationPreferences(update)
-                )
-            } catch {
-                errorMessage = "Could not update preferences."
-                await fetchAll()
-            }
-        }
-    }
-
-    private func savePushPrefs() {
-        pushPrefsError = nil
         Task {
             isSaving = true
             defer { isSaving = false }
-            let qStart = quietHoursEnabled ? Self.normalizeTime(quietStartText) : nil
-            let qEnd = quietHoursEnabled ? Self.normalizeTime(quietEndText) : nil
-            if quietHoursEnabled && (qStart == nil || qEnd == nil) {
-                pushPrefsError = "Enter quiet hours as 24h times, e.g. 22:00 and 08:00."
-                return
-            }
-            var req = PushNotificationPreferencesUpdate(
-                marketingEnabled: campaignMarketingEnabled,
-                pushEnabled: pushEnabled,
-                quietHoursEnabled: quietHoursEnabled,
-                quietStart: quietHoursEnabled ? qStart : nil,
-                quietEnd: quietHoursEnabled ? qEnd : nil
-            )
-            if !quietHoursEnabled {
-                req.quietStart = nil
-                req.quietEnd = nil
-            }
             do {
                 let env: PushNotificationPreferencesEnvelope = try await APIClient.shared.request(
-                    .updatePushNotificationPreferences(req)
+                    .updatePushNotificationPreferences(update)
                 )
-                let prefs = env.preferences
-                pushEnabled = prefs.pushEnabled
-                campaignMarketingEnabled = prefs.marketingEnabled
-                quietHoursEnabled = prefs.quietHoursEnabled
-                quietStartText = Self.formatQuiet(prefs.quietStart) ?? quietStartText
-                quietEndText = Self.formatQuiet(prefs.quietEnd) ?? quietEndText
+                applyFromServer(env.preferences)
             } catch {
-                pushPrefsError = "Could not save campaign preferences."
-                await fetchAll()
+                errorMessage = "Could not save preferences."
+                print("[NOTIFY_PREFS] patch error: \(error)")
+                await loadPreferences()
             }
         }
+    }
+
+    /// Backend: "HH:MM:SS" or null
+    private static func hhmmss(from date: Date) -> String {
+        let cal = Calendar.current
+        let h = cal.component(.hour, from: date)
+        let m = cal.component(.minute, from: date)
+        return String(format: "%02d:%02d:00", h, m)
+    }
+
+    private static func dateFromHHMMSS(_ s: String?, defaultHour: Int, defaultMinute: Int) -> Date {
+        let cal = Calendar.current
+        let base = Date()
+        guard let s, !s.isEmpty else {
+            return cal.date(bySettingHour: defaultHour, minute: defaultMinute, second: 0, of: base) ?? base
+        }
+        let parts = s.split(separator: ":")
+        guard parts.count >= 2,
+              let h = Int(parts[0]),
+              let m = Int(parts[1]),
+              h >= 0, h < 24, m >= 0, m < 60
+        else {
+            return cal.date(bySettingHour: defaultHour, minute: defaultMinute, second: 0, of: base) ?? base
+        }
+        let sec = parts.count > 2 ? (Int(parts[2]) ?? 0) : 0
+        return cal.date(bySettingHour: h, minute: m, second: min(59, max(0, sec)), of: base) ?? base
     }
 }
 

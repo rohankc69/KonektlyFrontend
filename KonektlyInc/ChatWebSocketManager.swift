@@ -191,8 +191,8 @@ final class ChatWebSocketManager {
 
     private func receiveMessage() {
         webSocketTask?.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
+            guard let self else { return }
+            Task { @MainActor [self] in
                 switch result {
                 case .success(let message):
                     // First successful receive confirms the WS handshake is complete

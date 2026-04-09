@@ -14,6 +14,9 @@ struct AppRootView: View {
     @EnvironmentObject private var authStore: AuthStore
     @EnvironmentObject private var messageStore: MessageStore
     @EnvironmentObject private var jobStore: JobStore
+    @EnvironmentObject private var notificationRouter: NotificationRoutingStore
+
+    @State private var showCampaignNotificationInbox = false
 
     var body: some View {
         Group {
@@ -39,6 +42,7 @@ struct AppRootView: View {
         .onChange(of: authStore.isAuthenticated) { _, isAuth in
             if isAuth {
                 selectedTab = 0
+                Task { await SubscriptionManager.shared.refreshSubscriptionStatus() }
             }
         }
     }
@@ -106,6 +110,16 @@ struct AppRootView: View {
                 selectedTab = 0
             }
         }
+        .onChange(of: notificationRouter.campaignTapSequence) { _, _ in
+            if notificationRouter.campaignTapSequence > 0 {
+                showCampaignNotificationInbox = true
+            }
+        }
+        .sheet(isPresented: $showCampaignNotificationInbox, onDismiss: {
+            _ = notificationRouter.consumePending()
+        }) {
+            NotificationHistoryView()
+        }
         .task {
             // Pre-fetch applications so map can show applied markers immediately
             if authStore.selectedRole == .worker {
@@ -118,4 +132,5 @@ struct AppRootView: View {
 #Preview {
     AppRootView()
         .environmentObject(AuthStore.shared)
+        .environmentObject(NotificationRoutingStore.shared)
 }

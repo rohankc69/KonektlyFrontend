@@ -409,7 +409,8 @@ struct ChatView: View {
                 onSubmit: submitReport,
                 onCancel: { showReportSheet = false }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.height(560), .large])
+            .presentationDragIndicator(.hidden)
         }
         // Block confirmation
         .alert("Block \(conversation.otherUserName)?", isPresented: $showBlockConfirmation) {
@@ -500,7 +501,11 @@ struct ChatView: View {
     }
 
     private func blockUser() {
-        guard let userId = Int(conversation.otherUserId) else { return }
+        guard let userId = Int(conversation.otherUserId) else {
+            print("[MSG] Block failed: otherUserId '\(conversation.otherUserId)' is not a valid integer")
+            withAnimation { showActionToast = "Could not identify user to block" }
+            return
+        }
         isBlocking = true
         Task {
             do {
@@ -512,7 +517,8 @@ struct ChatView: View {
                 }
             } catch {
                 print("[MSG] Block failed: \(error)")
-                withAnimation { showActionToast = "Failed to block user" }
+                let msg = (error as? AppError)?.errorDescription ?? "Failed to block user"
+                withAnimation { showActionToast = msg }
             }
             isBlocking = false
         }
@@ -530,73 +536,110 @@ struct ReportSheet: View {
     let onCancel: () -> Void
 
     private let reasons = [
-        ("spam", "Spam"),
-        ("harassment", "Harassment or bullying"),
+        ("spam",          "Spam"),
+        ("harassment",    "Harassment or bullying"),
         ("inappropriate", "Inappropriate content"),
-        ("scam", "Scam or fraud"),
-        ("other", "Other")
+        ("scam",          "Scam or fraud"),
+        ("other",         "Other")
     ]
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                Text("Why are you reporting \(userName)?")
-                    .font(Theme.Typography.headlineSemibold)
-                    .padding(.top, Theme.Spacing.md)
+        VStack(spacing: 0) {
+            // Drag handle
+            Capsule()
+                .fill(Color(UIColor.systemGray4))
+                .frame(width: 36, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
 
-                ForEach(reasons, id: \.0) { value, label in
-                    Button {
-                        reason = value
-                    } label: {
-                        HStack {
-                            Text(label)
-                                .font(Theme.Typography.body)
-                                .foregroundColor(Theme.Colors.primaryText)
-
-                            Spacer()
-
-                            if reason == value {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(Theme.Colors.accent)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundColor(Theme.Colors.tertiaryText)
-                            }
-                        }
-                        .padding(Theme.Spacing.md)
-                        .background(Theme.Colors.tertiaryBackground)
-                        .cornerRadius(Theme.CornerRadius.small)
-                    }
-                }
-
-                TextField("Additional details (optional)", text: $details, axis: .vertical)
+            // Header row — Cancel | Report | Submit
+            HStack {
+                Button("Cancel", action: onCancel)
                     .font(Theme.Typography.body)
-                    .lineLimit(3...5)
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.tertiaryBackground)
-                    .cornerRadius(Theme.CornerRadius.small)
+                    .foregroundColor(Theme.Colors.primaryText)
 
                 Spacer()
-            }
-            .padding(Theme.Spacing.lg)
-            .navigationTitle("Report")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+
+                Text("Report")
+                    .font(Theme.Typography.headlineSemibold)
+                    .foregroundColor(Theme.Colors.primaryText)
+
+                Spacer()
+
+                Button(action: onSubmit) {
+                    if isSubmitting {
+                        ProgressView().scaleEffect(0.85)
+                    } else {
+                        Text("Submit")
+                            .font(Theme.Typography.body.weight(.semibold))
+                            .foregroundColor(
+                                reason.isEmpty
+                                    ? Theme.Colors.tertiaryText
+                                    : Theme.Colors.accent
+                            )
+                    }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(action: onSubmit) {
-                        if isSubmitting {
-                            ProgressView()
-                        } else {
-                            Text("Submit")
+                .disabled(reason.isEmpty || isSubmitting)
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                    // Subtitle
+                    Text("Why are you reporting \(userName)?")
+                        .font(Theme.Typography.body)
+                        .foregroundColor(Theme.Colors.secondaryText)
+                        .padding(.top, Theme.Spacing.sm)
+
+                    // Reason options
+                    VStack(spacing: Theme.Spacing.sm) {
+                        ForEach(reasons, id: \.0) { value, label in
+                            Button {
+                                reason = value
+                            } label: {
+                                HStack(spacing: Theme.Spacing.md) {
+                                    Text(label)
+                                        .font(Theme.Typography.body)
+                                        .foregroundColor(Theme.Colors.primaryText)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Image(systemName: reason == value
+                                          ? "checkmark.circle.fill"
+                                          : "circle")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(
+                                            reason == value
+                                                ? Theme.Colors.accent
+                                                : Theme.Colors.tertiaryText
+                                        )
+                                }
+                                .padding(.horizontal, Theme.Spacing.md)
+                                .padding(.vertical, 14)
+                                .background(Theme.Colors.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .disabled(reason.isEmpty || isSubmitting)
+
+                    // Optional details
+                    TextField("Additional details (optional)", text: $details, axis: .vertical)
+                        .font(Theme.Typography.body)
+                        .foregroundColor(Theme.Colors.primaryText)
+                        .lineLimit(3...5)
+                        .padding(Theme.Spacing.md)
+                        .background(Theme.Colors.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
                 }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.lg)
+                .padding(.bottom, Theme.Spacing.xxl)
             }
         }
+        .background(Theme.Colors.background)
     }
 }
 

@@ -18,6 +18,9 @@ struct ShiftsView: View {
     @State private var reviewWorkerName: String?
     @State private var reviewWorkerPhoto: String?
     @State private var reviewJobTitle: String?
+    @State private var reviewPromptRole: ReviewPromptRole = .rateWorker
+    /// Jobs where the user tapped "Maybe Later" — don't auto-popup again this session.
+    @State private var skippedReviewJobIds: Set<Int> = []
 
     @EnvironmentObject private var jobStore: JobStore
     @EnvironmentObject private var locationManager: LocationManager
@@ -171,6 +174,8 @@ struct ShiftsView: View {
                     if jobStore.activeApplications.isEmpty && !jobStore.isLoadingMyApplications {
                         await jobStore.fetchMyApplications(lat: coord?.latitude, lng: coord?.longitude)
                     }
+                    await reviewStore.loadPendingReviews()
+                    presentWorkerReviewIfNeeded()
                 } else {
                     // Business: always refresh posted jobs on view load
                     await jobStore.fetchPostedJobs()
@@ -197,12 +202,16 @@ struct ShiftsView: View {
                                 )
                             }
                         }
+                        await reviewStore.loadPendingReviews()
+                        presentWorkerReviewIfNeeded()
                     } else {
                         await jobStore.fetchMyApplications(
                             lat: coord?.latitude,
                             lng: coord?.longitude,
                             forceRefresh: true
                         )
+                        await reviewStore.loadPendingReviews()
+                        presentWorkerReviewIfNeeded()
                     }
                 } else {
                     await jobStore.fetchPostedJobs(forceRefresh: true)
@@ -217,6 +226,8 @@ struct ShiftsView: View {
                             lat: coord?.latitude,
                             lng: coord?.longitude
                         )
+                        await reviewStore.loadPendingReviews()
+                        presentWorkerReviewIfNeeded()
                     }
                 }
             }
@@ -224,26 +235,53 @@ struct ShiftsView: View {
                 if let jobId = reviewJobId {
                     ReviewPromptView(
                         jobId: jobId,
+                        role: reviewPromptRole,
                         otherUserName: reviewWorkerName ?? "Worker",
                         otherUserPhotoUrl: reviewWorkerPhoto,
                         jobTitle: reviewJobTitle ?? "Job",
                         onDismiss: {
+                            if let id = reviewJobId {
+                                skippedReviewJobIds.insert(id)
+                            }
                             showReviewSheet = false
                             reviewJobId = nil
-                            jobStore.completionReview = nil
+                            if userRole == .business {
+                                jobStore.completionReview = nil
+                                jobStore.completionJobId = nil
+                                jobStore.completionJobTitle = nil
+                            }
                         }
                     )
                 }
             }
-            .onChange(of: jobStore.completionReview) { _, review in
-                if let review, review.eligible, let worker = review.worker {
-                    reviewJobId = jobStore.completionJobId
-                    reviewJobTitle = jobStore.completionJobTitle
-                    reviewWorkerName = "\(worker.firstName) \(worker.lastName)"
-                    reviewWorkerPhoto = worker.photoUrl
-                    // Show after a brief delay for smoother UX
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        showReviewSheet = true
+            /// Business: mark-complete response includes worker info — trigger sheet when job id is set (reliable vs `completionReview` equality).
+            .onChange(of: jobStore.completionJobId) { _, newId in
+                guard userRole == .business else { return }
+                guard let jobId = newId,
+                      let review = jobStore.completionReview,
+                      review.eligible,
+                      let worker = review.worker
+                else { return }
+                guard !skippedReviewJobIds.contains(jobId) else { return }
+                reviewPromptRole = .rateWorker
+                reviewJobId = jobId
+                reviewJobTitle = jobStore.completionJobTitle ?? jobStore.postedJobs.first(where: { $0.id == jobId })?.title
+                reviewWorkerName = "\(worker.firstName) \(worker.lastName)"
+                reviewWorkerPhoto = worker.photoUrl
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    showReviewSheet = true
+                }
+            }
+            .onChange(of: reviewStore.pendingReviews) { _, _ in
+                if userRole == .worker {
+                    presentWorkerReviewIfNeeded()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pendingReviewsRefresh)) { _ in
+                if userRole == .worker {
+                    Task {
+                        await reviewStore.loadPendingReviews()
+                        presentWorkerReviewIfNeeded()
                     }
                 }
             }
@@ -261,6 +299,21 @@ struct ShiftsView: View {
                     )
                 }
             }
+        }
+    }
+
+    /// Worker: show rate-business sheet when `/reviews/pending/` has an item we haven’t skipped.
+    private func presentWorkerReviewIfNeeded() {
+        guard userRole == .worker else { return }
+        guard !showReviewSheet else { return }
+        guard let first = reviewStore.pendingReviews.first(where: { !skippedReviewJobIds.contains($0.id) }) else { return }
+        reviewPromptRole = .rateBusiness
+        reviewJobId = first.id
+        reviewWorkerName = first.otherUserName
+        reviewWorkerPhoto = first.otherUserPhotoUrl
+        reviewJobTitle = first.title
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            showReviewSheet = true
         }
     }
 
@@ -518,7 +571,7 @@ struct NearbyJobListCard: View {
                 Task { await jobStore.applyForJob(jobId: job.id) }
             } label: {
                 HStack {
-                    if jobStore.isApplying { ProgressView().tint(.white) }
+                    if jobStore.isApplying(jobId: job.id) { ProgressView().tint(.white) }
                     Text(applyButtonTitle)
                         .font(Theme.Typography.subheadline.weight(.semibold))
                 }
@@ -558,7 +611,7 @@ struct NearbyJobListCard: View {
         job.statusEnum == .filled || job.statusEnum == .cancelled
     }
     private var applyButtonDisabled: Bool {
-        jobStore.isApplying || alreadyApplied || jobFilled
+        jobStore.isApplying(jobId: job.id) || alreadyApplied || jobFilled
     }
     private var applyButtonTitle: String {
         if alreadyApplied { return "Applied" }
@@ -672,8 +725,8 @@ struct PostedJobListCard: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.sm)
                     .background(jobStore.isCompleting
-                                ? Theme.Colors.primaryText.opacity(0.4)
-                                : Theme.Colors.primaryText)
+                                ? Theme.Colors.buttonPrimary.opacity(0.4)
+                                : Theme.Colors.buttonPrimary)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
                 }
                 .buttonStyle(.plain)
@@ -802,43 +855,85 @@ struct ApplicantRow: View {
     }
 
     var body: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.md) {
-                // Avatar initials
-                ZStack {
-                    Circle()
-                        .fill(Theme.Colors.tertiaryBackground)
-                        .frame(width: 36, height: 36)
-                    Text(initials)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.Colors.primaryText)
-                }
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            NavigationLink {
+                PublicWorkerProfileView(userId: application.workerId)
+            } label: {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                        AvatarImageView(
+                            previewImage: nil,
+                            photoURL: application.photoUrl.flatMap { URL(string: $0) },
+                            isUploading: false,
+                            size: 48
+                        )
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(application.firstName) \(application.lastName)")
-                        .font(Theme.Typography.subheadline.weight(.medium))
-                        .foregroundColor(Theme.Colors.primaryText)
-                    if let note = application.coverNote, !note.isEmpty {
-                        Text(note)
-                            .font(Theme.Typography.caption)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(application.displayName)
+                                    .font(Theme.Typography.subheadline.weight(.semibold))
+                                    .foregroundColor(Theme.Colors.primaryText)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: Theme.Spacing.sm)
+                                if !isPending {
+                                    Text(application.status.capitalized)
+                                        .font(Theme.Typography.caption.weight(.semibold))
+                                        .foregroundColor(statusColor)
+                                        .padding(.horizontal, Theme.Spacing.sm)
+                                        .padding(.vertical, 4)
+                                        .background(statusColor.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(Theme.Colors.tertiaryText)
+                            }
+
+                            if let headline = application.headline, !headline.isEmpty {
+                                Text(headline)
+                                    .font(Theme.Typography.caption)
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                            }
+
+                            InlineStarRating(
+                                avgRating: application.avgRating,
+                                reviewCount: application.reviewCount
+                            )
+
+                            if let skills = application.skills, !skills.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: Theme.Spacing.xs) {
+                                        ForEach(Array(skills.prefix(5)), id: \.self) { s in
+                                            SkillChip(name: s.name, proficiency: s.proficiency)
+                                        }
+                                        if skills.count > 5 {
+                                            Text("+\(skills.count - 5)")
+                                                .font(Theme.Typography.caption2)
+                                                .foregroundColor(Theme.Colors.tertiaryText)
+                                                .padding(.leading, Theme.Spacing.xs)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let note = application.coverNote, !note.isEmpty {
+                                Text(note)
+                                    .font(Theme.Typography.caption)
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                                    .lineLimit(3)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
                     }
                 }
-
-                Spacer()
-
-                // Status badge for non-pending
-                if !isPending {
-                    Text(application.status.capitalized)
-                        .font(Theme.Typography.caption.weight(.semibold))
-                        .foregroundColor(statusColor)
-                        .padding(.horizontal, Theme.Spacing.sm)
-                        .padding(.vertical, 4)
-                        .background(statusColor.opacity(0.12))
-                        .clipShape(Capsule())
-                }
+                .padding(Theme.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.Colors.tertiaryBackground.opacity(0.65))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
             }
+            .buttonStyle(.plain)
 
             // Action buttons for pending applicants
             if isPending {
@@ -898,7 +993,6 @@ struct ApplicantRow: View {
                 }
             }
         }
-        .padding(.vertical, Theme.Spacing.xs)
     }
 
     private func startChat() {
@@ -912,12 +1006,6 @@ struct ApplicantRow: View {
             }
             isStartingChat = false
         }
-    }
-
-    private var initials: String {
-        let f = application.firstName.prefix(1)
-        let l = application.lastName.prefix(1)
-        return "\(f)\(l)".uppercased()
     }
 }
 

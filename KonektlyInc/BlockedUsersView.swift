@@ -127,7 +127,8 @@ struct BlockedUsersView: View {
                 await messageStore.loadConversations()
             } catch {
                 print("[BLOCK] Unblock failed: \(error)")
-                withAnimation { errorMessage = "Failed to unblock user" }
+                let msg = (error as? AppError)?.errorDescription ?? "Failed to unblock user"
+                withAnimation { errorMessage = msg }
             }
             unblockingId = nil
         }

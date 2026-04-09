@@ -11,10 +11,13 @@ struct DataExportView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var exportStatus: DataExportStatusResponse.DataExportInfo?
-    @State private var isLoading = true
+    @State private var isInitialLoading = true
+    @State private var isRefreshing = false
     @State private var isRequesting = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @State private var pollingTimedOut = false
+    @State private var pollLoopTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,58 +49,90 @@ struct DataExportView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(spacing: Theme.Spacing.xxl) {
-                    // Icon
-                    Image(systemName: "square.and.arrow.down.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(Theme.Colors.accent)
-                        .padding(.top, Theme.Spacing.xxl)
+            Group {
+                if isInitialLoading {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                } else {
+                    ScrollView {
+                        VStack(spacing: Theme.Spacing.xxl) {
+                            Image(systemName: "square.and.arrow.down.fill")
+                                .font(.system(size: 48))
+                                .foregroundColor(Theme.Colors.accent)
+                                .padding(.top, Theme.Spacing.xxl)
 
-                    VStack(spacing: Theme.Spacing.md) {
-                        Text("Your Data, Your Right")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(Theme.Colors.primaryText)
+                            VStack(spacing: Theme.Spacing.md) {
+                                Text("Your Data, Your Right")
+                                    .font(.system(size: 20, weight: .bold))
+                                    .foregroundColor(Theme.Colors.primaryText)
 
-                        Text("Request a copy of all your personal data. This includes your profile, job history, messages, and more.")
-                            .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.secondaryText)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, Theme.Spacing.xl)
+                                Text("Request a copy of all your personal data. This includes your profile, job history, messages, and more.")
+                                    .font(Theme.Typography.body)
+                                    .foregroundColor(Theme.Colors.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, Theme.Spacing.xl)
+                            }
+
+                            if let export = exportStatus {
+                                exportStatusCard(export)
+                            } else {
+                                noExportView
+                            }
+
+                            if let error = errorMessage {
+                                Text(error)
+                                    .font(Theme.Typography.footnote)
+                                    .foregroundColor(Theme.Colors.error)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, Theme.Spacing.xl)
+                            }
+
+                            if let success = successMessage {
+                                Text(success)
+                                    .font(Theme.Typography.body)
+                                    .foregroundColor(Theme.Colors.success)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, Theme.Spacing.xl)
+                            }
+                        }
+                        .padding(.horizontal, Theme.Spacing.xl)
+                        .padding(.bottom, Theme.Spacing.xxl)
                     }
-
-                    if isLoading {
-                        ProgressView()
-                    } else if let export = exportStatus {
-                        exportStatusCard(export)
-                    } else {
-                        // No active export
-                        noExportView
-                    }
-
-                    if let error = errorMessage {
-                        Text(error)
-                            .font(Theme.Typography.footnote)
-                            .foregroundColor(Theme.Colors.error)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, Theme.Spacing.xl)
-                    }
-
-                    if let success = successMessage {
-                        Text(success)
-                            .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.success)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, Theme.Spacing.xl)
+                    .refreshable {
+                        await refreshStatusOnly()
                     }
                 }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.bottom, Theme.Spacing.xxl)
             }
         }
         .background(Theme.Colors.background)
         .navigationBarHidden(true)
-        .task { await checkStatus() }
+        .task {
+            await loadInitialStatus()
+            restartPollingIfNeeded()
+        }
+        .onDisappear {
+            pollLoopTask?.cancel()
+            pollLoopTask = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .dataExportReady)) { _ in
+            Task { await refreshStatusOnly() }
+        }
+        .onChange(of: exportStatus?.status) { _, _ in
+            restartPollingIfNeeded()
+        }
+        .onChange(of: exportStatus?.downloadUrl) { _, _ in
+            restartPollingIfNeeded()
+        }
+    }
+
+    /// Backend may use `preparing`, `queued`, etc. — keep polling while no download URL yet.
+    private func restartPollingIfNeeded() {
+        pollLoopTask?.cancel()
+        pollLoopTask = nil
+        pollingTimedOut = false
+        guard Self.shouldPoll(export: exportStatus) else { return }
+        startBoundedPolling()
     }
 
     // MARK: - No Export View
@@ -126,16 +161,20 @@ struct DataExportView: View {
 
     @ViewBuilder
     private func exportStatusCard(_ export: DataExportStatusResponse.DataExportInfo) -> some View {
+        let display = Self.displayStatusKey(export.status)
+        let hasDownload = Self.nonEmptyURL(export.downloadUrl)
+        let iconKey = hasDownload ? "completed" : display
+
         VStack(spacing: Theme.Spacing.lg) {
             HStack(spacing: Theme.Spacing.md) {
-                statusIcon(for: export.status)
+                statusIcon(for: iconKey)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(statusTitle(for: export.status))
+                    Text(statusTitle(for: display, hasDownload: hasDownload))
                         .font(Theme.Typography.headlineSemibold)
                         .foregroundColor(Theme.Colors.primaryText)
 
-                    Text(statusDescription(for: export))
+                    Text(statusDescription(for: export, displayKey: display, hasDownload: hasDownload))
                         .font(Theme.Typography.caption)
                         .foregroundColor(Theme.Colors.secondaryText)
                 }
@@ -143,8 +182,8 @@ struct DataExportView: View {
                 Spacer()
             }
 
-            if export.status == "completed", let urlString = export.downloadUrl,
-               let url = URL(string: urlString) {
+            // Show download whenever the API provides a URL (some backends keep status as "preparing").
+            if hasDownload, let urlString = export.downloadUrl, let url = URL(string: urlString) {
                 Link(destination: url) {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "arrow.down.circle.fill")
@@ -166,12 +205,29 @@ struct DataExportView: View {
                 }
             }
 
-            if export.status == "pending" || export.status == "processing" {
-                Button("Refresh Status") {
-                    Task { await checkStatus() }
+            if Self.isInProgress(status: export.status, hasDownload: hasDownload) {
+                if pollingTimedOut {
+                    Text("This is taking longer than usual. Check your email for a link, or pull to refresh.")
+                        .font(Theme.Typography.caption)
+                        .foregroundColor(Theme.Colors.secondaryText)
+                        .multilineTextAlignment(.leading)
                 }
-                .font(Theme.Typography.subheadline.weight(.semibold))
-                .foregroundColor(Theme.Colors.accent)
+
+                Button {
+                    Task { await refreshStatusOnly() }
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        if isRefreshing {
+                            ProgressView()
+                                .scaleEffect(0.85)
+                        }
+                        Text("Refresh status")
+                            .font(Theme.Typography.subheadline.weight(.semibold))
+                    }
+                    .foregroundColor(Theme.Colors.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshing)
             }
         }
         .padding(Theme.Spacing.xl)
@@ -181,17 +237,21 @@ struct DataExportView: View {
 
     // MARK: - Helpers
 
-    private func statusIcon(for status: String) -> some View {
+    private func statusIcon(for displayKey: String) -> some View {
         Group {
-            switch status {
+            switch displayKey {
             case "completed":
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 32))
                     .foregroundColor(Theme.Colors.success)
-            case "pending", "processing":
-                ProgressView()
-                    .scaleEffect(1.2)
-                    .frame(width: 32, height: 32)
+            case "in_progress":
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 32))
+                    .foregroundColor(Theme.Colors.accent)
+            case "failed":
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(Theme.Colors.error)
             case "expired":
                 Image(systemName: "clock.badge.exclamationmark")
                     .font(.system(size: 32))
@@ -204,22 +264,36 @@ struct DataExportView: View {
         }
     }
 
-    private func statusTitle(for status: String) -> String {
-        switch status {
-        case "completed": return "Export Ready"
-        case "pending": return "Preparing..."
-        case "processing": return "Processing..."
-        case "expired": return "Export Expired"
-        default: return status.capitalized
+    private func statusTitle(for displayKey: String, hasDownload: Bool) -> String {
+        if hasDownload { return "Export ready" }
+        switch displayKey {
+        case "completed": return "Export ready"
+        case "in_progress": return "Preparing your export"
+        case "failed": return "Export failed"
+        case "expired": return "Export expired"
+        default: return "Export status"
         }
     }
 
-    private func statusDescription(for export: DataExportStatusResponse.DataExportInfo) -> String {
-        switch export.status {
-        case "completed": return "Your data export is ready to download."
-        case "pending", "processing": return "This may take a few minutes. Check back shortly."
-        case "expired": return "This export has expired. Request a new one."
-        default: return ""
+    private func statusDescription(
+        for export: DataExportStatusResponse.DataExportInfo,
+        displayKey: String,
+        hasDownload: Bool
+    ) -> String {
+        if hasDownload {
+            return "Your data export is ready to download."
+        }
+        switch displayKey {
+        case "completed":
+            return "Your data export is ready to download."
+        case "in_progress":
+            return "We’ll notify you when it’s ready. You can leave this screen — check your email too."
+        case "failed":
+            return "Something went wrong. Try requesting a new export in a few minutes."
+        case "expired":
+            return "This link has expired. Request a new export."
+        default:
+            return "Hang tight — we’re still preparing your file. Pull down to refresh."
         }
     }
 
@@ -236,15 +310,29 @@ struct DataExportView: View {
 
     // MARK: - Network
 
-    private func checkStatus() async {
-        isLoading = true
-        defer { isLoading = false }
+    private func loadInitialStatus() async {
+        isInitialLoading = true
+        defer { isInitialLoading = false }
+        await fetchStatus()
+    }
+
+    /// Refresh without replacing the whole screen with a spinner (pull-to-refresh & push).
+    private func refreshStatusOnly() async {
+        guard !isInitialLoading else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await fetchStatus()
+    }
+
+    private func fetchStatus() async {
         do {
             let response: DataExportStatusResponse = try await APIClient.shared.request(.dataExportStatus)
             exportStatus = response.export
+            errorMessage = nil
         } catch {
-            // No active export — that's fine
             exportStatus = nil
+            errorMessage = "Could not load export status. Pull to try again."
+            print("[DataExport] status error: \(error)")
         }
     }
 
@@ -257,9 +345,8 @@ struct DataExportView: View {
             defer { isRequesting = false }
             do {
                 let _: DataExportResponse = try await APIClient.shared.request(.requestDataExport)
-                successMessage = "Your data export is being prepared. This may take a few minutes."
-                // Refresh status
-                await checkStatus()
+                successMessage = "Your export is being prepared. We’ll notify you when it’s ready."
+                await fetchStatus()
             } catch AppError.rateLimited {
                 errorMessage = "You can only request one export per 24 hours."
             } catch let appError as AppError {
@@ -268,6 +355,68 @@ struct DataExportView: View {
                 errorMessage = AppError.network(underlying: error).errorDescription
             }
         }
+    }
+
+    /// Poll periodically while pending/processing (stops when status changes or after ~2 min).
+    private func startBoundedPolling() {
+        pollLoopTask?.cancel()
+        pollLoopTask = Task { @MainActor in
+            for attempt in 0..<30 {
+                if Task.isCancelled { return }
+                // Avoid stacking with the fetch that just set status to pending.
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { return }
+                await refreshStatusOnly()
+                if let ex = exportStatus, !Self.shouldPoll(export: ex) {
+                    pollingTimedOut = false
+                    return
+                }
+                if attempt == 29 {
+                    pollingTimedOut = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Status normalization (backend variants)
+
+    private static func nonEmptyURL(_ raw: String?) -> Bool {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return false
+        }
+        return URL(string: raw) != nil
+    }
+
+    /// Maps raw API status to a small set of UI keys.
+    private static func displayStatusKey(_ raw: String) -> String {
+        let s = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch s {
+        case "completed", "complete", "ready", "success", "done", "available":
+            return "completed"
+        case "failed", "error", "failure":
+            return "failed"
+        case "expired":
+            return "expired"
+        case "pending", "processing", "preparing", "queued", "queue", "in_progress", "running",
+             "working", "started", "in progress":
+            return "in_progress"
+        default:
+            // Treat unknown values as in-flight so we never show an empty "stuck" state.
+            return "in_progress"
+        }
+    }
+
+    private static func isInProgress(status: String, hasDownload: Bool) -> Bool {
+        if hasDownload { return false }
+        let d = displayStatusKey(status)
+        if d == "failed" || d == "expired" { return false }
+        if d == "completed" { return false }
+        return true
+    }
+
+    private static func shouldPoll(export: DataExportStatusResponse.DataExportInfo?) -> Bool {
+        guard let export else { return false }
+        return isInProgress(status: export.status, hasDownload: nonEmptyURL(export.downloadUrl))
     }
 }
 

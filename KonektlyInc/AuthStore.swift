@@ -356,6 +356,9 @@ final class AuthStore: ObservableObject {
         MessageStore.shared.clearAll()
         // Clear review state
         ReviewStore.shared.clearAll()
+        SupportStore.shared.clearAll()
+        ActivityStore.shared.clearAll()
+        SubscriptionManager.shared.clearSessionSubscriptionCaches()
         // Reset to role picker on next login
         UserDefaults.standard.removeObject(forKey: "hasPickedRole")
         UserDefaults.standard.removeObject(forKey: "userRole")

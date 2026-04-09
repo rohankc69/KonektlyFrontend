@@ -14,6 +14,7 @@ struct VerificationStatusView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @State private var isRefreshing = false
     @State private var showEmailVerification = false
+    @State private var emailVerificationSheetID = UUID()
     @State private var showSubscription = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showDeleteConfirm = false
@@ -32,6 +33,7 @@ struct VerificationStatusView: View {
     @State private var showEditProfile = false
     @State private var showEditBusinessProfile = false
     @State private var showHistory = false
+    @State private var showSupport = false
     @State private var showReviewPrompt = false
     @State private var reviewJob: PendingReviewJob?
     @StateObject private var reviewStore = ReviewStore.shared
@@ -98,7 +100,10 @@ struct VerificationStatusView: View {
                     .environmentObject(authStore)
             }
             .navigationDestination(isPresented: $showHistory) {
-                ShiftsView()
+                HistoryView()
+            }
+            .navigationDestination(isPresented: $showSupport) {
+                SupportView()
             }
             .overlay(alignment: .top) {
                 // Photo upload error/success banner
@@ -126,6 +131,7 @@ struct VerificationStatusView: View {
             .sheet(isPresented: $showEmailVerification) {
                 NavigationStack {
                     EmailVerificationView()
+                        .id(emailVerificationSheetID)
                         .environmentObject(authStore)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
@@ -138,6 +144,7 @@ struct VerificationStatusView: View {
                 if let job = reviewJob {
                     ReviewPromptView(
                         jobId: job.id,
+                        role: .rateBusiness,
                         otherUserName: job.otherUserName,
                         otherUserPhotoUrl: job.otherUserPhotoUrl,
                         jobTitle: job.title,
@@ -156,6 +163,16 @@ struct VerificationStatusView: View {
                             }
                         }
                 }
+            }
+            .alert(item: Binding(
+                get: { subscriptionManager.restoreResultAlert },
+                set: { subscriptionManager.restoreResultAlert = $0 }
+            )) { alert in
+                Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.message),
+                    dismissButton: .default(Text("OK"))
+                )
             }
         }
         .task { await refresh() }
@@ -370,21 +387,28 @@ struct VerificationStatusView: View {
                 }
             }
 
-            // Email
+            // Email (always tappable: add, verify, or change — replacement happens after verifying the new address)
             ProfileMenuItem(
                 icon: "envelope.fill",
                 title: "Email",
                 subtitle: emailSubtitle
             ) {
-                if user?.emailVerified != true {
-                    showEmailVerification = true
-                }
+                emailVerificationSheetID = UUID()
+                showEmailVerification = true
             }
             menuDivider
 
             // Konektly+ subscription
             SubscriptionMenuItem(isActive: subscriptionManager.isKonektlyPlus) {
                 showSubscription = true
+            }
+            menuDivider
+            ProfileMenuItem(
+                icon: "arrow.clockwise.circle",
+                title: "Restore Purchases",
+                subtitle: "Sync Konektly+ from the App Store"
+            ) {
+                Task { await subscriptionManager.restorePurchases() }
             }
 
             // ── Activity ──
@@ -459,9 +483,11 @@ struct VerificationStatusView: View {
 
             ProfileMenuItem(
                 icon: "questionmark.circle.fill",
-                title: "Help",
-                subtitle: nil
-            ) {}
+                title: "Help & Support",
+                subtitle: "FAQs and ticket support"
+            ) {
+                showSupport = true
+            }
             menuDivider
 
             ProfileMenuItem(
@@ -513,9 +539,12 @@ struct VerificationStatusView: View {
 
     private var emailSubtitle: String {
         if let email = user?.email, !email.isEmpty {
-            return user?.emailVerified == true ? email : "\(email) (unverified)"
+            if user?.emailVerified == true {
+                return "\(email) · Tap to change"
+            }
+            return "\(email) (unverified)"
         }
-        return "Add email for account recovery"
+        return "Add or change email for account recovery"
     }
 
     private func statusSubtitle(_ status: String) -> String {
@@ -656,9 +685,11 @@ struct AvatarImageView: View {
             if let image = UIImage(data: data) {
                 loadedImage = image
                 lastLoadedURL = url
-                print("[AVATAR] Image loaded successfully")
+                print("[AVATAR] Image loaded successfully (\(data.count) bytes)")
             } else {
-                print("[AVATAR] Failed to create UIImage from data (\(data.count) bytes)")
+                // If the response is XML or HTML, it's likely an S3 error (e.g. 403 SignatureMismatch)
+                let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+                print("[AVATAR] Failed to decode image — response body: \(preview)")
                 loadFailed = true
             }
         } catch {

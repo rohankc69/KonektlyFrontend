@@ -326,7 +326,7 @@ final class MessageStore: ObservableObject {
     // MARK: - Block / Report
 
     func blockUser(userId: Int) async throws {
-        let _: BlockUserResponse = try await APIClient.shared.request(.blockUser(userId: userId))
+        let _: VoidAPIResponse = try await APIClient.shared.request(.blockUser(userId: userId))
         // Refresh conversations — blocked user's conversations will be hidden by backend
         await loadConversations()
     }

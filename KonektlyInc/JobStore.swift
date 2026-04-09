@@ -97,6 +97,7 @@ final class JobStore: ObservableObject {
 
     /// Worker: apply-for-job state
     @Published private(set) var isApplying = false
+    @Published private(set) var applyingJobIds: Set<Int> = []
     @Published private(set) var applyError: JobStoreError? = nil
     /// The most recently submitted application (so the UI can show pending state)
     @Published private(set) var lastSubmittedApplication: JobApplication? = nil
@@ -159,7 +160,7 @@ final class JobStore: ObservableObject {
                                                postalCode: postalCode, radius: radius,
                                                filter: filter)
             let response: NearbyJobsResponse = try await APIClient.shared.request(endpoint)
-            nearbyJobs = response.jobs
+            nearbyJobs = deduplicatedJobsById(response.jobs)
             print("[JOBS] fetchNearbyJobs: \(response.count) jobs (filter=\(filter ?? "all"))")
         } catch {
             if isCancellation(error) {
@@ -319,11 +320,16 @@ final class JobStore: ObservableObject {
     /// - Returns: The created `JobApplication` on success, `nil` on failure (check `applyError`).
     @discardableResult
     func applyForJob(jobId: Int, coverNote: String? = nil) async -> JobApplication? {
+        guard !applyingJobIds.contains(jobId), !hasApplied(jobId: jobId) else { return nil }
         guard !isApplying else { return nil }
         isApplying = true
+        applyingJobIds.insert(jobId)
         applyError = nil
         lastSubmittedApplication = nil
-        defer { isApplying = false }
+        defer {
+            applyingJobIds.remove(jobId)
+            isApplying = false
+        }
 
         do {
             let response: ApplyForJobResponse = try await APIClient.shared.request(
@@ -489,10 +495,15 @@ final class JobStore: ObservableObject {
             return true
         } catch {
             let storeError = JobStoreError.from(error as? AppError ?? .unknown)
-            completeError = storeError
-            // If already completed, refresh to sync server state
+            // If already completed, update local state immediately so the button
+            // disappears at once, then sync with the server in the background.
             if storeError == .jobAlreadyCompleted {
+                postedJobs = postedJobs.map { job in
+                    job.id == jobId ? job.withStatus(.completed) : job
+                }
                 await fetchPostedJobs(forceRefresh: true)
+            } else {
+                completeError = storeError
             }
             print("[JOBS] markJobComplete error: \(storeError.errorDescription ?? "")")
             return false
@@ -521,6 +532,9 @@ final class JobStore: ObservableObject {
         hireError = nil
         completeError = nil
         myApplicationsError = nil
+        completionReview = nil
+        completionJobId = nil
+        completionJobTitle = nil
     }
 
     /// Fetch a single job by ID and inject it into nearbyJobs if not already present.
@@ -551,5 +565,23 @@ final class JobStore: ObservableObject {
         appliedJobIds.contains(jobId)
             || activeApplications.contains { $0.job.id == jobId }
             || completedApplications.contains { $0.job.id == jobId }
+    }
+
+    /// Whether this specific job currently has an in-flight apply request.
+    func isApplying(jobId: Int) -> Bool {
+        applyingJobIds.contains(jobId)
+    }
+
+    /// Defensive client-side de-duplication to avoid duplicate-id rows causing
+    /// unpredictable SwiftUI list/card state updates.
+    private func deduplicatedJobsById(_ jobs: [APIJob]) -> [APIJob] {
+        var seen = Set<Int>()
+        var unique: [APIJob] = []
+        unique.reserveCapacity(jobs.count)
+        for job in jobs where !seen.contains(job.id) {
+            seen.insert(job.id)
+            unique.append(job)
+        }
+        return unique
     }
 }

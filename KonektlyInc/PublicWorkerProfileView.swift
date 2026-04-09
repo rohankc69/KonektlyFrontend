@@ -13,6 +13,7 @@ struct PublicWorkerProfileView: View {
     @State private var reviews: [ReviewResponse] = []
     @State private var isLoading = true
     @State private var showAllReviews = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         Group {
@@ -26,6 +27,7 @@ struct PublicWorkerProfileView: View {
                         aboutSection(profile)
                         skillsSection(profile)
                         experienceSection(profile)
+                        resumeSection(profile)
                         availabilitySection(profile)
                         reviewsSection(profile)
                     }
@@ -46,6 +48,21 @@ struct PublicWorkerProfileView: View {
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadProfile() }
+        .sheet(isPresented: $showAllReviews) {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                        ForEach(reviews) { review in
+                            reviewRow(review)
+                        }
+                    }
+                    .padding(Theme.Spacing.lg)
+                }
+                .background(Theme.Colors.background)
+                .navigationTitle("All reviews")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+        }
     }
 
     // MARK: - Header
@@ -77,11 +94,11 @@ struct PublicWorkerProfileView: View {
             HStack(spacing: Theme.Spacing.xs) {
                 if p.verificationStatus == "instant_verified" || p.verificationStatus == "approved_manual" {
                     Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(Theme.Colors.accent)
                         .font(.system(size: 16))
                     Text("Verified")
                         .font(Theme.Typography.caption)
-                        .foregroundColor(.blue)
+                        .foregroundColor(Theme.Colors.accent)
                 }
             }
 
@@ -208,6 +225,89 @@ struct PublicWorkerProfileView: View {
         }
     }
 
+    // MARK: - Resume
+
+    @ViewBuilder
+    private func resumeSection(_ p: PublicWorkerProfile) -> some View {
+        if let resume = p.resume {
+            sectionCard(title: "Resume") {
+                if let urlStr = resume.url, let url = URL(string: urlStr) {
+                    let title = resume.fileName ?? "Resume"
+                    Button {
+                        openURL(url)
+                    } label: {
+                        HStack(spacing: Theme.Spacing.md) {
+                            Image(systemName: "doc.richtext")
+                                .font(.system(size: 22))
+                                .foregroundColor(Theme.Colors.accent)
+                            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                                Text(title)
+                                    .font(Theme.Typography.bodyMedium)
+                                    .foregroundColor(Theme.Colors.primaryText)
+                                    .multilineTextAlignment(.leading)
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    if let ct = resume.contentType, !ct.isEmpty {
+                                        Text(ct)
+                                            .font(Theme.Typography.caption2)
+                                            .foregroundColor(Theme.Colors.tertiaryText)
+                                    }
+                                    if let bytes = resume.sizeBytes {
+                                        Text(Self.formatByteSize(bytes))
+                                            .font(Theme.Typography.caption2)
+                                            .foregroundColor(Theme.Colors.tertiaryText)
+                                    }
+                                    if let uploaded = resume.uploadedAt, !uploaded.isEmpty {
+                                        Text("· \(Self.shortDateLabel(uploaded))")
+                                            .font(Theme.Typography.caption2)
+                                            .foregroundColor(Theme.Colors.tertiaryText)
+                                    }
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 22))
+                                .foregroundColor(Theme.Colors.accent)
+                        }
+                        .padding(Theme.Spacing.md)
+                        .background(Theme.Colors.tertiaryBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.small))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("No resume file available")
+                        .font(Theme.Typography.caption)
+                        .foregroundColor(Theme.Colors.tertiaryText)
+                }
+            }
+        }
+    }
+
+    private static func formatByteSize(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024 { return String(format: "%.1f KB", kb) }
+        return String(format: "%.1f MB", kb / 1024.0)
+    }
+
+    private static func shortDateLabel(_ isoOrRaw: String) -> String {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: isoOrRaw) {
+            let out = DateFormatter()
+            out.dateStyle = .medium
+            out.timeStyle = .none
+            return out.string(from: d)
+        }
+        let alt = ISO8601DateFormatter()
+        alt.formatOptions = [.withFullDate]
+        if let d = alt.date(from: String(isoOrRaw.prefix(10))) {
+            let out = DateFormatter()
+            out.dateStyle = .medium
+            return out.string(from: d)
+        }
+        return isoOrRaw
+    }
+
     // MARK: - Availability
 
     @ViewBuilder
@@ -308,14 +408,19 @@ struct PublicWorkerProfileView: View {
     private func loadProfile() async {
         isLoading = true
         defer { isLoading = false }
+        profile = nil
+        reviews = []
         do {
-            async let profileReq: PublicWorkerProfile = APIClient.shared.request(.publicWorkerProfile(userId: userId))
-            async let reviewsReq: ReviewsListResponse = APIClient.shared.request(.userReviews(userId: userId))
-            let (p, r) = try await (profileReq, reviewsReq)
+            let p: PublicWorkerProfile = try await APIClient.shared.request(.publicWorkerProfile(userId: userId))
             profile = p
-            reviews = r.reviews
         } catch {
             print("[PROFILE] load error: \(error)")
+        }
+        do {
+            let r: ReviewsListResponse = try await APIClient.shared.request(.userReviews(userId: userId))
+            reviews = r.reviews
+        } catch {
+            print("[PROFILE] reviews load error: \(error)")
         }
     }
 

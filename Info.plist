@@ -17,6 +17,10 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>PrivacyPolicyURL</key>
+	<string>https://konektly.ca/privacy-policy</string>
+	<key>SupportURL</key>
+	<string>https://konektly.ca/support</string>
 	<key>NSAppTransportSecurity</key>
 	<dict/>
 	<key>UIBackgroundModes</key>

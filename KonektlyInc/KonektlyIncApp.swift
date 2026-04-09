@@ -125,6 +125,22 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             }
         }
 
+        if notificationType == "data_export_ready" {
+            Task { @MainActor in
+                NotificationCenter.default.post(name: .dataExportReady, object: nil)
+            }
+        }
+
+        // Shift complete / review reminder — refresh pending reviews for workers & businesses
+        if notificationType == "review_prompt"
+            || notificationType == "job_completed"
+            || notificationType == "job_complete" {
+            Task { @MainActor in
+                await ReviewStore.shared.loadPendingReviews()
+                NotificationCenter.default.post(name: .pendingReviewsRefresh, object: nil)
+            }
+        }
+
         return [.banner, .sound, .badge]
     }
 
@@ -144,8 +160,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             let tid = userInfo["template_id"] as? String ?? (userInfo["template_id"] as? NSNumber).map { String(describing: $0) }
             let cid = userInfo["campaign_id"] as? String ?? (userInfo["campaign_id"] as? NSNumber).map { String(describing: $0) }
             await MainActor.run {
-                NotificationRoutingStore.shared.pendingTemplateId = tid
-                NotificationRoutingStore.shared.pendingCampaignId = cid
+                NotificationRoutingStore.shared.registerCampaignNotificationTap(templateId: tid, campaignId: cid)
+            }
+        } else if notificationType == "data_export_ready" {
+            await MainActor.run {
+                NotificationCenter.default.post(name: .dataExportReady, object: nil)
+            }
+        } else if notificationType == "review_prompt"
+                    || notificationType == "job_completed"
+                    || notificationType == "job_complete" {
+            Task { @MainActor in
+                await ReviewStore.shared.loadPendingReviews()
+                NotificationCenter.default.post(name: .pendingReviewsRefresh, object: nil)
             }
         } else if let conversationIdStr = userInfo["conversation_id"] as? String,
                   let conversationId = UUID(uuidString: conversationIdStr) {
@@ -164,6 +190,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
 extension Notification.Name {
     static let marketingPushReceived = Notification.Name("marketingPushReceived")
+    /// Posted when a data export finished processing (foreground push or tap).
+    static let dataExportReady = Notification.Name("dataExportReady")
+    /// Posted after a job completes or a review reminder — reload pending reviews and show prompt if needed.
+    static let pendingReviewsRefresh = Notification.Name("pendingReviewsRefresh")
 }
 
 @main
@@ -206,6 +236,7 @@ struct KonektlyIncApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
                         Task {
+                            await subscriptionManager.retryValidateUnfinishedTransactions(source: "app_active")
                             await subscriptionManager.refreshSubscriptionStatus()
                             if authStore.isAuthenticated {
                                 await messageStore.loadUnreadCount()

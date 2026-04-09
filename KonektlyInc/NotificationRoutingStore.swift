@@ -16,6 +16,16 @@ final class NotificationRoutingStore: ObservableObject {
     @Published var pendingTemplateId: String?
     @Published var pendingCampaignId: String?
 
+    /// Bumps when the user taps a campaign/marketing notification — root UI presents the inbox sheet.
+    @Published private(set) var campaignTapSequence: Int = 0
+
+    /// Call from AppDelegate when user opens a campaign push from the system UI.
+    func registerCampaignNotificationTap(templateId: String?, campaignId: String?) {
+        pendingTemplateId = templateId
+        pendingCampaignId = campaignId
+        campaignTapSequence += 1
+    }
+
     func consumePending() -> (templateId: String?, campaignId: String?) {
         let t = pendingTemplateId
         let c = pendingCampaignId

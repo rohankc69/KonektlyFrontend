@@ -723,6 +723,128 @@ extension APIClient {
     func fetchSubscriptionStatus() async throws -> SubscriptionStatus {
         return try await request(.subscriptionStatus)
     }
+
+    /// GET /subscriptions/apple/account-token/
+    /// Backend may return either the standard `{ success, data: { app_account_token } }` envelope or a flat `{ app_account_token }` body.
+    func fetchAppleAppAccountToken() async throws -> UUID {
+        let endpoint = Endpoint.appleAppAccountToken
+        let urlRequest = try buildRequest(endpoint: endpoint, authenticated: true)
+        return try await executeAppleAccountToken(urlRequest, endpoint: endpoint, retryCount: 0)
+    }
+
+    private func executeAppleAccountToken(
+        _ request: URLRequest,
+        endpoint: Endpoint,
+        retryCount: Int
+    ) async throws -> UUID {
+        let urlString = request.url?.absoluteString ?? "?"
+        print("[API] [\(endpoint.method.rawValue)] \(urlString)")
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            if isCancellation(error) {
+                throw CancellationError()
+            }
+            print("[API] Network error for \(urlString): \(error)")
+            throw AppError.network(underlying: error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.unknown
+        }
+
+        print("[API] HTTP \(httpResponse.statusCode) <- \(urlString)")
+        if let body = String(data: data, encoding: .utf8) {
+            let truncated = body.count > 1000 ? String(body.prefix(1000)) + "...<truncated>" : body
+            print("[API] Response body: \(truncated)")
+        }
+
+        if httpResponse.statusCode == 429 {
+            let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+            throw AppError.rateLimited(retryAfter: retryAfter)
+        }
+
+        if httpResponse.statusCode == 409 {
+            if let envelope = try? decoder.decode(APIResponse<EmptyResponse>.self, from: data),
+               let errorPayload = envelope.error {
+                let code = APIErrorCode(rawValue: errorPayload.code) ?? .unknown
+                switch code {
+                case .jobNotOpen, .alreadyApplied, .applicationAlreadyProcessed,
+                     .alreadyReviewed, .reviewWindowExpired, .jobNotCompleted,
+                     .notAParticipant, .noCompletedShift, .maxExperiencesReached:
+                    throw AppError.apiError(code: code, message: errorPayload.message)
+                default:
+                    throw AppError.conflict(message: errorPayload.message)
+                }
+            }
+            let msg = parseErrorMessage(data: data) ?? "This profile is already verified and cannot be changed."
+            throw AppError.conflict(message: msg)
+        }
+
+        if httpResponse.statusCode == 503 {
+            let msg = parseErrorMessage(data: data) ?? "Service is temporarily unavailable. Please try again later."
+            throw AppError.serviceUnavailable(message: msg)
+        }
+
+        if httpResponse.statusCode == 401 && retryCount == 0 {
+            do {
+                let newToken = try await refreshAccessToken()
+                var retryRequest = request
+                retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                return try await executeAppleAccountToken(retryRequest, endpoint: endpoint, retryCount: 1)
+            } catch {
+                throw AppError.unauthorized
+            }
+        }
+
+        if (200...204).contains(httpResponse.statusCode) {
+            let tokenString = try decodeAppAccountTokenString(from: data)
+            guard let uuid = UUID(uuidString: tokenString) else {
+                throw AppError.decoding(
+                    underlying: DecodingError.dataCorrupted(
+                        DecodingError.Context(
+                            codingPath: [],
+                            debugDescription: "Invalid app_account_token (expected UUID string): \(tokenString)"
+                        )
+                    )
+                )
+            }
+            return uuid
+        }
+
+        let _: AppleAccountTokenResponse = try decodeResponse(data: data, statusCode: httpResponse.statusCode)
+        throw AppError.unknown
+    }
+
+    /// Parses envelope or flat JSON; supports snake_case and camelCase keys.
+    private func decodeAppAccountTokenString(from data: Data) throws -> String {
+        if let env = try? decoder.decode(APIResponse<AppleAccountTokenResponse>.self, from: data),
+           env.success,
+           let inner = env.data {
+            return inner.appAccountToken
+        }
+        if let flat = try? decoder.decode(AppleAccountTokenResponse.self, from: data) {
+            return flat.appAccountToken
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let nested = obj["data"] as? [String: Any] {
+                if let t = nested["app_account_token"] as? String { return t }
+                if let t = nested["appAccountToken"] as? String { return t }
+            }
+            if let t = obj["app_account_token"] as? String { return t }
+            if let t = obj["appAccountToken"] as? String { return t }
+        }
+        if let raw = String(data: data, encoding: .utf8) {
+            print("[API] account-token could not parse body: \(raw.prefix(500))")
+        }
+        throw AppError.decoding(
+            underlying: DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: [], debugDescription: "Missing app_account_token in response")
+            )
+        )
+    }
 }
 
 // MARK: - Endpoint
@@ -934,6 +1056,9 @@ extension Endpoint {
     /// GET /api/v1/subscriptions/me/
     static let subscriptionStatus = Endpoint(path: "/api/v1/subscriptions/me/", method: .get)
 
+    /// GET /api/v1/subscriptions/apple/account-token/
+    static let appleAppAccountToken = Endpoint(path: "/api/v1/subscriptions/apple/account-token/", method: .get)
+
     // MARK: - Messaging Endpoints
 
     /// POST /api/v1/messages/conversations/start/ — Business starts pre-hire chat with an applicant
@@ -1011,14 +1136,14 @@ extension Endpoint {
     // MARK: - Notification Preferences
 
     /// Job / message / legacy marketing toggles (`messaging.NotificationPreference`).
-    /// GET/PATCH /api/v1/messages/notification-preferences/
+    /// Legacy split: job/message/marketing via messages app (optional; unified prefs live under notifications).
     static let messagingNotificationPreferences = Endpoint(path: "/api/v1/messages/notification-preferences/", method: .get)
 
     static func updateMessagingNotificationPreferences(_ req: NotificationPreferencesUpdate) -> Endpoint {
         Endpoint(path: "/api/v1/messages/notification-preferences/", method: .patch, body: AnyEncodable(req))
     }
 
-    /// Push campaign prefs (`notifications.UserNotificationPreference`).
+    /// Unified notification prefs — `data.preferences` includes push, job, message, marketing, quiet hours.
     /// GET/PATCH /api/v1/notifications/preferences/
     static let pushNotificationPreferences = Endpoint(path: "/api/v1/notifications/preferences/", method: .get)
 

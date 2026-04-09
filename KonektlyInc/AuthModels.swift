@@ -924,6 +924,7 @@ nonisolated struct NearbyWorker: Decodable, Sendable, Identifiable, Equatable {
         case avgRating = "avg_rating"
         case reviewCount = "review_count"
         case skills
+        case workerSkills = "worker_skills"
     }
 
     init(from decoder: Decoder) throws {
@@ -934,7 +935,7 @@ nonisolated struct NearbyWorker: Decodable, Sendable, Identifiable, Equatable {
         verificationStatus = try c.decode(String.self, forKey: .verificationStatus)
         photoUrl = try c.decodeIfPresent(String.self, forKey: .photoUrl)
         headline = try c.decodeIfPresent(String.self, forKey: .headline)
-        skills = try c.decodeIfPresent([SkillSummary].self, forKey: .skills)
+        skills = SkillSummaryListDecoding.decode(c, primary: .skills, alternate: .workerSkills)
 
         if let value = try? c.decodeIfPresent(Double.self, forKey: .distanceKm) {
             distanceKm = value
@@ -1043,6 +1044,7 @@ nonisolated struct JobApplication: Decodable, Sendable, Identifiable, Equatable 
         case avgRating = "avg_rating"
         case reviewCount = "review_count"
         case skills
+        case workerSkills = "worker_skills"
         case photoUrl = "photo_url"
     }
 
@@ -1057,7 +1059,7 @@ nonisolated struct JobApplication: Decodable, Sendable, Identifiable, Equatable 
         status = try c.decode(String.self, forKey: .status)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         headline = try c.decodeIfPresent(String.self, forKey: .headline)
-        skills = try c.decodeIfPresent([SkillSummary].self, forKey: .skills)
+        skills = SkillSummaryListDecoding.decode(c, primary: .skills, alternate: .workerSkills)
         photoUrl = try c.decodeIfPresent(String.self, forKey: .photoUrl)
 
         if let value = try? c.decodeIfPresent(Int.self, forKey: .reviewCount) {
@@ -1607,23 +1609,39 @@ nonisolated struct NotificationPreferencesUpdate: Encodable, Sendable {
     }
 }
 
-// MARK: - Push / campaign preferences (notifications app — UserNotificationPreference)
+// MARK: - Unified notification preferences (GET/PATCH /api/v1/notifications/preferences/)
 
-nonisolated struct PushNotificationPreferences: Codable, Sendable {
-    var marketingEnabled: Bool
+nonisolated struct PushNotificationPreferences: Decodable, Sendable {
     var pushEnabled: Bool
+    var jobNotifications: Bool
+    var messageNotifications: Bool
+    var marketingEnabled: Bool
     var quietHoursEnabled: Bool
     var quietStart: String?
     var quietEnd: String?
     var updatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case marketingEnabled = "marketing_enabled"
         case pushEnabled = "push_enabled"
+        case jobNotifications = "job_notifications"
+        case messageNotifications = "message_notifications"
+        case marketingEnabled = "marketing_enabled"
         case quietHoursEnabled = "quiet_hours_enabled"
         case quietStart = "quiet_start"
         case quietEnd = "quiet_end"
         case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pushEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushEnabled) ?? true
+        jobNotifications = try c.decodeIfPresent(Bool.self, forKey: .jobNotifications) ?? true
+        messageNotifications = try c.decodeIfPresent(Bool.self, forKey: .messageNotifications) ?? true
+        marketingEnabled = try c.decodeIfPresent(Bool.self, forKey: .marketingEnabled) ?? true
+        quietHoursEnabled = try c.decodeIfPresent(Bool.self, forKey: .quietHoursEnabled) ?? false
+        quietStart = try c.decodeIfPresent(String.self, forKey: .quietStart)
+        quietEnd = try c.decodeIfPresent(String.self, forKey: .quietEnd)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
     }
 }
 
@@ -1631,16 +1649,21 @@ nonisolated struct PushNotificationPreferencesEnvelope: Decodable, Sendable {
     let preferences: PushNotificationPreferences
 }
 
+/// PATCH body: include only keys that changed. Optional `nil` values are omitted when encoded.
 nonisolated struct PushNotificationPreferencesUpdate: Encodable, Sendable {
-    var marketingEnabled: Bool?
     var pushEnabled: Bool?
+    var jobNotifications: Bool?
+    var messageNotifications: Bool?
+    var marketingEnabled: Bool?
     var quietHoursEnabled: Bool?
     var quietStart: String?
     var quietEnd: String?
 
     enum CodingKeys: String, CodingKey {
-        case marketingEnabled = "marketing_enabled"
         case pushEnabled = "push_enabled"
+        case jobNotifications = "job_notifications"
+        case messageNotifications = "message_notifications"
+        case marketingEnabled = "marketing_enabled"
         case quietHoursEnabled = "quiet_hours_enabled"
         case quietStart = "quiet_start"
         case quietEnd = "quiet_end"
@@ -1691,16 +1714,122 @@ nonisolated struct MuteConversationRequest: Encodable, Sendable {
 
 // MARK: - Skills
 
+/// One worker skill as returned across list/public/application endpoints.
+/// APIs may use `{ "name", "proficiency" }`, `{ "skill_name", ... }`, or nested `skill: { "name" }`.
 nonisolated struct SkillSummary: Codable, Sendable, Equatable, Hashable {
     let name: String
     let proficiency: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case proficiency
+        case skillName = "skill_name"
+        case skill
+    }
+
+    init(name: String, proficiency: String) {
+        self.name = name
+        self.proficiency = proficiency
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let n = try c.decodeIfPresent(String.self, forKey: .name) {
+            name = n
+        } else if let n = try c.decodeIfPresent(String.self, forKey: .skillName) {
+            name = n
+        } else if let nested = try? c.nestedContainer(keyedBy: SkillNestedKeys.self, forKey: .skill) {
+            name = try nested.decode(String.self, forKey: .name)
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "SkillSummary: expected name, skill_name, or skill.name")
+            )
+        }
+        proficiency = try c.decodeIfPresent(String.self, forKey: .proficiency) ?? "intermediate"
+    }
+
+    private enum SkillNestedKeys: String, CodingKey {
+        case name
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(proficiency, forKey: .proficiency)
+    }
 }
 
+/// Master skill row from `GET /api/v1/skills/` (shape varies slightly by backend version).
 nonisolated struct SkillDetail: Codable, Sendable, Equatable, Identifiable {
     let id: Int
     let name: String
     let slug: String
     let category: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case skillId = "skill_id"
+        case name
+        case title
+        case label
+        case slug
+        case category
+        case categoryName = "category_name"
+        case categorySlug = "category_slug"
+    }
+
+    init(id: Int, name: String, slug: String, category: String) {
+        self.id = id
+        self.name = name
+        self.slug = slug
+        self.category = category
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let v = try? c.decode(Int.self, forKey: .id) {
+            id = v
+        } else if let v = try? c.decode(Int.self, forKey: .skillId) {
+            id = v
+        } else if let s = try? c.decode(String.self, forKey: .id), let v = Int(s) {
+            id = v
+        } else if let s = try? c.decode(String.self, forKey: .skillId), let v = Int(s) {
+            id = v
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "SkillDetail: missing id/skill_id")
+            )
+        }
+        if let n = try? c.decode(String.self, forKey: .name) {
+            name = n
+        } else if let n = try? c.decode(String.self, forKey: .title) {
+            name = n
+        } else if let n = try? c.decode(String.self, forKey: .label) {
+            name = n
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "SkillDetail: missing name/title")
+            )
+        }
+        slug = (try? c.decodeIfPresent(String.self, forKey: .slug)) ?? ""
+        if let cat = try? c.decodeIfPresent(String.self, forKey: .category), !cat.isEmpty {
+            category = cat
+        } else if let cat = try? c.decodeIfPresent(String.self, forKey: .categoryName), !cat.isEmpty {
+            category = cat
+        } else if let cat = try? c.decodeIfPresent(String.self, forKey: .categorySlug), !cat.isEmpty {
+            category = cat
+        } else {
+            category = "General"
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(slug, forKey: .slug)
+        try c.encode(category, forKey: .category)
+    }
 }
 
 nonisolated struct WorkerSkillItem: Codable, Sendable, Equatable, Identifiable {
@@ -1709,8 +1838,73 @@ nonisolated struct WorkerSkillItem: Codable, Sendable, Equatable, Identifiable {
     let proficiency: String
 }
 
+/// Decodes `skills` / `worker_skills` whether the API sends flat summaries or nested worker_skill rows.
+private enum SkillSummaryListDecoding {
+    nonisolated static func decode<K: CodingKey>(
+        _ c: KeyedDecodingContainer<K>,
+        primary: K,
+        alternate: K? = nil
+    ) -> [SkillSummary]? {
+        func mapWorkerItems(_ items: [WorkerSkillItem]) -> [SkillSummary] {
+            items.map { SkillSummary(name: $0.skill.name, proficiency: $0.proficiency) }
+        }
+        if let items = try? c.decodeIfPresent([WorkerSkillItem].self, forKey: primary), !items.isEmpty {
+            return mapWorkerItems(items)
+        }
+        if let items = try? c.decodeIfPresent([SkillSummary].self, forKey: primary), !items.isEmpty {
+            return items
+        }
+        if let items = try? c.decodeIfPresent([String].self, forKey: primary), !items.isEmpty {
+            return items.map { SkillSummary(name: $0, proficiency: "intermediate") }
+        }
+        if let alt = alternate {
+            if let items = try? c.decodeIfPresent([WorkerSkillItem].self, forKey: alt), !items.isEmpty {
+                return mapWorkerItems(items)
+            }
+            if let items = try? c.decodeIfPresent([SkillSummary].self, forKey: alt), !items.isEmpty {
+                return items
+            }
+        }
+        if let items = try? c.decodeIfPresent([SkillSummary].self, forKey: primary) { return items }
+        if let items = try? c.decodeIfPresent([WorkerSkillItem].self, forKey: primary) { return mapWorkerItems(items) }
+        return nil
+    }
+}
+
+/// Catalog list: backend may use `skills`, DRF-paginated `results`, or a bare JSON array.
 nonisolated struct SkillsListResponse: Decodable, Sendable {
     let skills: [SkillDetail]
+
+    enum CodingKeys: String, CodingKey {
+        case skills
+        case results
+        case items
+    }
+
+    init(from decoder: Decoder) throws {
+        if var unkeyed = try? decoder.unkeyedContainer() {
+            var arr: [SkillDetail] = []
+            while !unkeyed.isAtEnd {
+                arr.append(try unkeyed.decode(SkillDetail.self))
+            }
+            skills = arr
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let s = try? c.decode([SkillDetail].self, forKey: .skills) {
+            skills = s
+            return
+        }
+        if let s = try? c.decode([SkillDetail].self, forKey: .results) {
+            skills = s
+            return
+        }
+        if let s = try? c.decode([SkillDetail].self, forKey: .items) {
+            skills = s
+            return
+        }
+        skills = []
+    }
 }
 
 nonisolated struct WorkerSkillsResponse: Decodable, Sendable {
@@ -1981,6 +2175,38 @@ nonisolated struct WorkerProfileUpdateResponse: Decodable, Sendable {
 
 // MARK: - Public Worker Profile
 
+/// Resume payload on GET /api/v1/profiles/worker/<id>/public/ (presigned download URL for business viewers).
+nonisolated struct WorkerResumePublicInfo: Decodable, Sendable {
+    let fileName: String?
+    let contentType: String?
+    let sizeBytes: Int?
+    let uploadedAt: String?
+    let url: String?
+
+    enum CodingKeys: String, CodingKey {
+        case fileName = "file_name"
+        case contentType = "content_type"
+        case sizeBytes = "size_bytes"
+        case uploadedAt = "uploaded_at"
+        case url
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
+        contentType = try c.decodeIfPresent(String.self, forKey: .contentType)
+        uploadedAt = try c.decodeIfPresent(String.self, forKey: .uploadedAt)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        if let v = try? c.decodeIfPresent(Int.self, forKey: .sizeBytes) {
+            sizeBytes = v
+        } else if let s = try? c.decodeIfPresent(String.self, forKey: .sizeBytes), let n = Int(s) {
+            sizeBytes = n
+        } else {
+            sizeBytes = nil
+        }
+    }
+}
+
 nonisolated struct PublicWorkerProfile: Decodable, Sendable {
     let userId: Int
     let firstName: String
@@ -1996,6 +2222,7 @@ nonisolated struct PublicWorkerProfile: Decodable, Sendable {
     let experiences: [WorkExperience]?
     let availability: [AvailabilitySlot]?
     let photoUrl: String?
+    let resume: WorkerResumePublicInfo?
 
     var displayName: String { "\(firstName) \(lastName)" }
 
@@ -2009,8 +2236,54 @@ nonisolated struct PublicWorkerProfile: Decodable, Sendable {
         case reviewCount = "review_count"
         case completedJobs = "completed_jobs"
         case profileCompleteness = "profile_completeness"
-        case skills, experiences, availability
+        case skills, experiences, availability, resume
+        case workerSkills = "worker_skills"
         case photoUrl = "photo_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(Int.self, forKey: .userId)
+        firstName = try c.decode(String.self, forKey: .firstName)
+        lastName = try c.decode(String.self, forKey: .lastName)
+        headline = try c.decodeIfPresent(String.self, forKey: .headline)
+        bio = try c.decodeIfPresent(String.self, forKey: .bio)
+        verificationStatus = try c.decode(String.self, forKey: .verificationStatus)
+        if let v = try? c.decodeIfPresent(String.self, forKey: .avgRating) {
+            avgRating = v
+        } else if let v = try? c.decodeIfPresent(Double.self, forKey: .avgRating) {
+            avgRating = String(v)
+        } else if let v = try? c.decodeIfPresent(Int.self, forKey: .avgRating) {
+            avgRating = String(v)
+        } else {
+            avgRating = nil
+        }
+        if let v = try? c.decodeIfPresent(Int.self, forKey: .reviewCount) {
+            reviewCount = v
+        } else if let s = try? c.decodeIfPresent(String.self, forKey: .reviewCount), let n = Int(s) {
+            reviewCount = n
+        } else {
+            reviewCount = nil
+        }
+        if let v = try? c.decodeIfPresent(Int.self, forKey: .completedJobs) {
+            completedJobs = v
+        } else if let s = try? c.decodeIfPresent(String.self, forKey: .completedJobs), let n = Int(s) {
+            completedJobs = n
+        } else {
+            completedJobs = nil
+        }
+        if let v = try? c.decodeIfPresent(Int.self, forKey: .profileCompleteness) {
+            profileCompleteness = v
+        } else if let s = try? c.decodeIfPresent(String.self, forKey: .profileCompleteness), let n = Int(s) {
+            profileCompleteness = n
+        } else {
+            profileCompleteness = nil
+        }
+        skills = SkillSummaryListDecoding.decode(c, primary: .skills, alternate: .workerSkills)
+        experiences = try c.decodeIfPresent([WorkExperience].self, forKey: .experiences)
+        availability = try c.decodeIfPresent([AvailabilitySlot].self, forKey: .availability)
+        photoUrl = try c.decodeIfPresent(String.self, forKey: .photoUrl)
+        resume = try c.decodeIfPresent(WorkerResumePublicInfo.self, forKey: .resume)
     }
 }
 
@@ -2114,7 +2387,8 @@ nonisolated struct DataExportResponse: Decodable, Sendable {
 }
 
 nonisolated struct DataExportStatusResponse: Decodable, Sendable {
-    let export: DataExportInfo
+    /// Nil when the user has no export on file (`"export": null` in API).
+    let export: DataExportInfo?
 
     struct DataExportInfo: Decodable, Sendable {
         let id: String

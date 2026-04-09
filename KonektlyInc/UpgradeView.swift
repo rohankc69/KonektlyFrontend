@@ -10,10 +10,12 @@ import SwiftUI
 struct UpgradeView: View {
     let price: String
     let isPurchasing: Bool
+    var isRestoring: Bool = false
     let isLoadingProduct: Bool
     let onPurchase: () -> Void
     let onRestore: () -> Void
     let onRetry: () -> Void
+    @Environment(\.openURL) private var openURL
 
     private var isProductLoaded: Bool { !price.isEmpty }
     private var loadFailed: Bool { !isProductLoaded && !isLoadingProduct }
@@ -110,20 +112,33 @@ struct UpgradeView: View {
                 // MARK: - CTA
                 VStack(spacing: Theme.Spacing.md) {
                     Button(action: onPurchase) {
-                        if isPurchasing {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Text(isProductLoaded ? "Subscribe Now · \(price)/mo" : "Loading…")
+                        Group {
+                            if isPurchasing {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            } else {
+                                Text(isProductLoaded ? "Subscribe Now · \(price)/mo" : "Loading…")
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: isPurchasing)
+                    }
+                    // Never disable Subscribe because of syncNotice — that blocked Apple Pay without feedback.
+                    .primaryButtonStyle(isEnabled: !isPurchasing && (isProductLoaded || isLoadingProduct))
+                    .disabled(isPurchasing || (!isProductLoaded && !isLoadingProduct))
+
+                    Button(action: onRestore) {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            if isRestoring {
+                                ProgressView()
+                                    .scaleEffect(0.9)
+                            }
+                            Text("Restore Purchases")
                         }
                     }
-                    .primaryButtonStyle(isEnabled: isProductLoaded && !isPurchasing)
-                    .disabled(!isProductLoaded || isPurchasing)
-
-                    Button("Restore Purchases", action: onRestore)
-                        .font(Theme.Typography.subheadline)
-                        .foregroundStyle(Theme.Colors.accent)
-                        .frame(height: Theme.Sizes.smallButtonHeight)
+                    .font(Theme.Typography.subheadline)
+                    .foregroundStyle(Theme.Colors.accent)
+                    .frame(height: Theme.Sizes.smallButtonHeight)
+                    .disabled(isRestoring)
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.xl)
@@ -135,6 +150,24 @@ struct UpgradeView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, Theme.Spacing.xl)
                     .padding(.top, Theme.Spacing.md)
+
+                HStack(spacing: Theme.Spacing.lg) {
+                    Button("Terms of Use") {
+                        openURL(AppWebsiteURLs.termsOfUse)
+                    }
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundStyle(Theme.Colors.accent)
+
+                    Text("·")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+
+                    Button("Privacy Policy") {
+                        openURL(AppWebsiteURLs.privacyPolicy)
+                    }
+                    .font(Theme.Typography.caption.weight(.semibold))
+                    .foregroundStyle(Theme.Colors.accent)
+                }
                     .padding(.bottom, Theme.Spacing.xxxl)
             }
         }

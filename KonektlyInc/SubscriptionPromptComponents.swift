@@ -18,7 +18,7 @@ struct ActiveSubscriptionCard: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: "checkmark.seal.fill")
-                            .foregroundColor(.green)
+                            .foregroundColor(Theme.Colors.success)
                             .font(.system(size: 20))
                         Text("Konektly+ Active")
                             .font(Theme.Typography.title2)
@@ -61,8 +61,8 @@ struct ActiveSubscriptionCard: View {
         .background(
             LinearGradient(
                 colors: [
-                    Color.green.opacity(0.1),
-                    Color.green.opacity(0.05)
+                    Theme.Colors.success.opacity(0.14),
+                    Theme.Colors.success.opacity(0.07)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -73,7 +73,7 @@ struct ActiveSubscriptionCard: View {
             RoundedRectangle(cornerRadius: Theme.CornerRadius.large)
                 .stroke(
                     LinearGradient(
-                        colors: [Color.green.opacity(0.3), Color.green.opacity(0.1)],
+                        colors: [Theme.Colors.success.opacity(0.35), Theme.Colors.success.opacity(0.12)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),

@@ -28,6 +28,16 @@ nonisolated struct SubscriptionStatus: Codable, Sendable {
     }
 }
 
+// MARK: - Apple account token (binds StoreKit purchase to Konektly account)
+
+nonisolated struct AppleAccountTokenResponse: Decodable, Sendable {
+    let appAccountToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case appAccountToken = "app_account_token"
+    }
+}
+
 // MARK: - Validate endpoint request/response
 
 nonisolated struct AppleValidateRequest: Encodable, Sendable {

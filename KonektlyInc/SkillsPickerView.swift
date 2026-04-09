@@ -17,6 +17,7 @@ struct SkillsPickerView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastIsError = false
+    @State private var catalogLoadError: String?
     @Environment(\.dismiss) private var dismiss
 
     private let maxSkills = 15
@@ -68,6 +69,34 @@ struct SkillsPickerView: View {
             if isLoading {
                 Spacer()
                 ProgressView()
+                Spacer()
+            } else if allSkills.isEmpty {
+                Spacer()
+                VStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 40))
+                        .foregroundColor(Theme.Colors.tertiaryText)
+                    Text("No skills to show")
+                        .font(Theme.Typography.headlineSemibold)
+                        .foregroundColor(Theme.Colors.primaryText)
+                    if let catalogLoadError {
+                        Text(catalogLoadError)
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    } else {
+                        Text("Pull to refresh or try again later.")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.secondaryText)
+                    }
+                    Button("Retry") {
+                        Task { await loadData() }
+                    }
+                    .font(Theme.Typography.bodySemibold)
+                    .foregroundColor(Theme.Colors.accent)
+                }
+                .padding()
                 Spacer()
             } else {
                 ScrollView {
@@ -216,22 +245,35 @@ struct SkillsPickerView: View {
 
     private func loadData() async {
         isLoading = true
+        catalogLoadError = nil
         defer { isLoading = false }
 
+        // Catalog and "my skills" are loaded separately so a failure on one doesn't wipe the other.
         do {
-            async let skillsReq: SkillsListResponse = APIClient.shared.request(.allSkills())
-            async let myReq: WorkerSkillsResponse = APIClient.shared.request(.mySkills)
-
-            let (allSkillsResp, mySkillsResp) = try await (skillsReq, myReq)
+            let allSkillsResp: SkillsListResponse = try await APIClient.shared.request(.allSkills())
             allSkills = allSkillsResp.skills
-            // Expand all categories by default
             expandedCategories = Set(allSkills.map { $0.category })
+        } catch {
+            print("[SKILLS] catalog load error: \(error)")
+            catalogLoadError = error.localizedDescription
+            if allSkills.isEmpty {
+                toastMessage = "Couldn't load skill list."
+                toastIsError = true
+                withAnimation { showToast = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
 
+        do {
+            let mySkillsResp: WorkerSkillsResponse = try await APIClient.shared.request(.mySkills)
+            selectedSkills = [:]
             for item in mySkillsResp.skills {
                 selectedSkills[item.skill.id] = item.proficiency
             }
         } catch {
-            print("[SKILLS] load error: \(error)")
+            print("[SKILLS] my skills load error: \(error)")
         }
     }
 

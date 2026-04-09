@@ -9,7 +9,7 @@ import SwiftUI
 
 struct Theme {
     
-    // MARK: - Colors (Uber-inspired palette with Dark Mode support)
+    // MARK: - Colors (semantic palette, Dark Mode–aware)
     struct Colors {
         static let primary = Color.primary
         static let secondary = Color.secondary
@@ -27,6 +27,9 @@ struct Theme {
         
         // Functional colors
         static let success = Color(red: 0.18, green: 0.62, blue: 0.52) // Muted teal
+        /// Filled stars in rating UIs (matches list/profile star affordance).
+        static let ratingStarActive = Color(UIColor.systemYellow)
+        static let ratingStarInactive = Color(UIColor.systemGray4)
         static let warning = Color.orange
         static let error = Color(red: 0.86, green: 0.24, blue: 0.24) // Muted red
         static let urgent = Color(red: 0.86, green: 0.24, blue: 0.24)
